@@ -14,15 +14,24 @@
   },
   "files": [
     "src/",
+    "bin/",
     "LICENSE",
     "README.md"
   ],
   "type": "module",
   "main": "src/index.ts",
+  "bin": {
+    "pi-perplexity-mcp": "bin/pi-perplexity-mcp.js"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
     ]
+  },
+  "dependencies": {
+    "@prefecthq/fastmcp-ts": "^1.5.0",
+    "jiti": "^2.7.0",
+    "zod": "^4.3.6"
   },
   "peerDependencies": {
     "@earendil-works/pi-tui": "*",

@@ -42,6 +42,75 @@ Set `PI_PERPLEXITY_HOME` to the checkout containing `src/cli.ts` and `node_modul
 | `PI_PERPLEXITY_ASK_TIMEOUT_MS` | Normal-search subprocess timeout (defaults to 90,000 ms) |
 | `PI_PERPLEXITY_DEEP_TIMEOUT_MS` | Deep-research subprocess timeout (defaults to 600,000 ms) |
 
+## MCP server
+
+pi-perplexity also ships a standalone [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client — Claude Desktop, Cursor, etc. — can use your Perplexity subscription for web search. It reuses the same search stack as the pi extension, with no subprocess and no extra credentials.
+
+**Requires Node >= 22** on the host running the server (the `@prefecthq/fastmcp-ts` runtime requirement). This is independent of the pi extension, which keeps the Node >= 18.14.1 floor.
+
+Authenticate once first (see [Authentication](#authentication)):
+
+```text
+pi /perplexity-login
+```
+
+### Claude Desktop / Cursor
+
+Add the server to your MCP client config. For stdio (recommended):
+
+```json
+{
+  "mcpServers": {
+    "pi-perplexity": {
+      "command": "npx",
+      "args": ["-y", "pi-perplexity-mcp"]
+    }
+  }
+}
+```
+
+To run from a checkout instead, point the command at the bin shim:
+
+```json
+{
+  "mcpServers": {
+    "pi-perplexity": {
+      "command": "node",
+      "args": ["/path/to/pi-perplexity/bin/pi-perplexity-mcp.js"]
+    }
+  }
+}
+```
+
+### Tools
+
+| Tool | Description |
+|---|---|
+| `perplexity_search` | Web search with a synthesized answer and numbered source citations. Params: `query` (required), `recency` (`hour`\|`day`\|`week`\|`month`\|`year`), `limit` (1–50). |
+| `perplexity_deep` | Longer-running research using the `pplx_alpha` model (overridable per call via `model`), with a longer timeout and progress notifications. Same params as `perplexity_search` plus optional `model`. |
+
+Both tools always run incognito. Authentication is non-interactive under MCP: if no cached token, env credential, or macOS desktop token is available, the tool returns a readable error directing you to run `pi /perplexity-login`.
+
+### Configuration
+
+Settings resolve in priority order: **CLI flag → environment variable → config file → default**. The config file is the same `~/.config/pi-perplexity/config.json` used by the pi extension.
+
+| Setting | Flag | Env | File | Default |
+|---|---|---|---|---|
+| search model | `--model <id>` | `PI_PERPLEXITY_MODEL` | `model` | `pplx_pro_upgraded` |
+| deep model | `--deep-model <id>` | `PI_PERPLEXITY_DEEP_MODEL` | — | `pplx_alpha` |
+| config path | `--config <path>` | — | — | `~/.config/pi-perplexity/config.json` |
+| transport | `--transport stdio\|http` | `MCP_TRANSPORT` | — | `stdio` |
+| http host | `--host <addr>` | `MCP_HOST` | — | `127.0.0.1` |
+| http port | `--port <n>` | `MCP_PORT` / `PORT` | — | `3000` |
+| http path | `--path <path>` | `MCP_PATH` | — | `/mcp` |
+
+For the HTTP transport, the server binds to loopback by default and **refuses non-loopback hosts** unless you pass `--allow-public` or set `PI_PERPLEXITY_ALLOW_PUBLIC=1`. Only enable this behind a trusted reverse proxy with MCP authentication — the server processes your Perplexity credentials.
+
+```bash
+pi-perplexity-mcp --help
+```
+
 ## Authentication
 
 Run login once:

@@ -82,6 +82,24 @@ To run from a checkout instead, point the command at the bin shim:
 }
 ```
 
+### Nix
+
+A `flake.nix` (using [flake-parts](https://flake.parts)) builds the MCP server as a Nix package. From a checkout:
+
+```bash
+nix build .#pi-perplexity-mcp
+./result/bin/pi-perplexity-mcp --help
+nix run .#pi-perplexity-mcp -- --help
+```
+
+There is also a dev shell providing Node 22 + npm:
+
+```bash
+nix develop
+```
+
+The derivation restores only the runtime dependencies (`@prefecthq/fastmcp-ts`, `jiti`, `zod`) — the pi-host peer deps and dev tree are omitted — and wraps the binary with Node 22 on `PATH`. Point an MCP client at `result/bin/pi-perplexity-mcp` in place of `npx`.
+
 ### Tools
 
 | Tool | Description |

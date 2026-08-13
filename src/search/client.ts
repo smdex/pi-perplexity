@@ -14,6 +14,8 @@ export interface SearchParams {
   model: string;
 }
 
+export type SearchProgress = (event: StreamEvent, snapshot: StreamEvent) => void;
+
 function normalizeUrl(url: string): string {
   const trimmed = url.trim().replace(/\/$/, "");
   try {
@@ -190,6 +192,7 @@ export async function searchPerplexity(
   params: SearchParams,
   auth: AuthCredentials,
   signal?: AbortSignal,
+  onProgress?: SearchProgress,
 ): Promise<SearchResult> {
   const requestId = randomUUID();
   const requestBody = buildRequestBody(params);
@@ -232,6 +235,7 @@ export async function searchPerplexity(
     try {
       for await (const event of readSseEvents(eventStream, signal)) {
         snapshot = mergeEvent(snapshot, event);
+        onProgress?.(event, snapshot);
         if (event.final || event.status === "COMPLETED") {
           stoppedAtTerminalEvent = true;
           break;

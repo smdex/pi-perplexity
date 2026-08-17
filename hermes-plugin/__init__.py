@@ -166,34 +166,51 @@ def _run_cli(args: Any, subcommand: str) -> str:
         return _failure(str(error) or error.__class__.__name__)
 
 
-def perplexity_ask(args: Any) -> str:
+def perplexity_ask(args: Any, **_kwargs: Any) -> str:
     return _run_cli(args, "ask")
 
 
-def perplexity_deep(args: Any) -> str:
+def perplexity_deep(args: Any, **_kwargs: Any) -> str:
     return _run_cli(args, "deep")
 
 
 TOOL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "query": {"type": "string", "description": "Search query"},
-        "recency": {"type": "string", "enum": list(RECENCIES), "description": "Filter results by recency"},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Max sources to return"},
+    "name": "perplexity_ask",
+    "description": (
+        "Search the web using Perplexity (Pro/Max subscription) with synthesized answer "
+        "and numbered source citations. Use for questions requiring up-to-date web "
+        "information. Queries always run incognito. Requires prior `pi /perplexity-login`."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+            "recency": {"type": "string", "enum": list(RECENCIES), "description": "Filter results by recency"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Max sources to return"},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
     },
-    "required": ["query"],
-    "additionalProperties": False,
 }
 
 DEEP_TOOL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "query": {"type": "string", "description": "Deep research query"},
-        "recency": {"type": "string", "enum": list(RECENCIES), "description": "Filter results by recency"},
-        "model": {"type": "string", "default": "pplx_alpha", "description": "Deep research model override"},
+    "name": "perplexity_deep",
+    "description": (
+        "Long-running Perplexity research (pplx_alpha model). Same copilot pipeline as "
+        "perplexity_ask but with a longer timeout and progress notifications; best for "
+        "multi-step research questions. Requires prior `pi /perplexity-login`."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Deep research query"},
+            "recency": {"type": "string", "enum": list(RECENCIES), "description": "Filter results by recency"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Max sources to return"},
+            "model": {"type": "string", "default": "pplx_alpha", "description": "Deep research model override"},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
     },
-    "required": ["query"],
-    "additionalProperties": False,
 }
 
 
@@ -204,14 +221,12 @@ def register(ctx: Any) -> None:
         toolset="pi_perplexity",
         schema=TOOL_SCHEMA,
         handler=perplexity_ask,
-        description="Search the web using Perplexity through pi-perplexity.",
     )
     ctx.register_tool(
         name="perplexity_deep",
         toolset="pi_perplexity",
         schema=DEEP_TOOL_SCHEMA,
         handler=perplexity_deep,
-        description="Run deep research using Perplexity through pi-perplexity.",
     )
 
 

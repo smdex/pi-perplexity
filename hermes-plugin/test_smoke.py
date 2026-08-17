@@ -82,7 +82,26 @@ def test_deep_uses_deep_command_model_and_timeout() -> None:
     assert command[5] == "deep"
     assert json.loads(command[6]) == {"query": "fixture"}
     assert options["timeout"] == 1.234
-    assert _plugin.DEEP_TOOL_SCHEMA["properties"]["model"]["default"] == "pplx_alpha"
+    assert _plugin.DEEP_TOOL_SCHEMA["parameters"]["properties"]["model"]["default"] == "pplx_alpha"
+
+
+def test_handlers_accept_runtime_kwargs() -> None:
+    """Hermes injects kwargs (task_id, etc.) into tool handlers — must not raise."""
+    class Completed:
+        returncode = 0
+        stdout = '{"ok":true,"answer":"x","sources":[]}'
+        stderr = ""
+
+    with patch.dict(
+        _plugin.os.environ,
+        {"PI_PERPLEXITY_HOME": str(Path.cwd()), "PI_PERPLEXITY_NODE": "node-fixture"},
+        clear=False,
+    ), patch.object(_plugin.subprocess, "run", lambda *a, **k: Completed()):
+        ask = json.loads(_plugin.perplexity_ask({"query": "x"}, task_id="t1"))
+        deep = json.loads(_plugin.perplexity_deep({"query": "x"}, task_id="t2"))
+
+    assert ask["ok"] is True
+    assert deep["ok"] is True
 
 
 def test_registers_ask_and_deep_tools() -> None:
@@ -101,5 +120,6 @@ if __name__ == "__main__":
     test_builds_node_jiti_command_and_parses_json()
     test_failing_subprocess_returns_json_without_raising()
     test_deep_uses_deep_command_model_and_timeout()
+    test_handlers_accept_runtime_kwargs()
     test_registers_ask_and_deep_tools()
     print("hermes-plugin smoke tests passed")

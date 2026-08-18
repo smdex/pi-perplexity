@@ -5,7 +5,9 @@ import { extractFromDesktopApp, authenticate } from "./auth/login.js";
 import { loadToken } from "./auth/storage.js";
 import { loadConfig, resolveDefaultModel } from "./config.js";
 import { searchPerplexity } from "./search/client.js";
-import { AuthError, SearchError, type SearchResult, type StoredToken } from "./search/types.js";
+import { buildSearchPayload } from "./search/payload.js";
+import { AuthError, SearchError, type StoredToken } from "./search/types.js";
+import { renderToon } from "./format/toon.js";
 import { errorMessage } from "./util.js";
 
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -27,11 +29,13 @@ export interface DeepArguments extends AskArguments {
 export interface CliArguments {
   subcommand: "ask" | "deep" | "auth-status";
   rawArgs?: string;
+  json?: boolean;
 }
 
 export interface CliOutput {
   exitCode: number;
   payload: Record<string, unknown>;
+  json: boolean;
 }
 
 export interface CliDependencies {
@@ -57,7 +61,10 @@ function invalidArguments(message: string): Error {
 }
 
 export function parseCliArguments(argv: readonly string[]): CliArguments {
-  const [subcommand, rawArgs, ...extra] = argv;
+  // `--json` may appear anywhere; it selects JSON output instead of the TOON default.
+  const positional = argv.filter((arg) => arg !== "--json");
+  const json = positional.length !== argv.length;
+  const [subcommand, rawArgs, ...extra] = positional;
   if (extra.length > 0) {
     throw invalidArguments("expected one JSON argument");
   }
@@ -70,7 +77,7 @@ export function parseCliArguments(argv: readonly string[]): CliArguments {
     throw invalidArguments("auth-status does not accept arguments");
   }
 
-  return { subcommand, ...(rawArgs !== undefined ? { rawArgs } : {}) };
+  return { subcommand, ...(rawArgs !== undefined ? { rawArgs } : {}), ...(json ? { json: true } : {}) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,11 +168,7 @@ function createTimeoutSignal(kind: "ask" | "deep"): { signal: AbortSignal; dispo
   };
 }
 
-function limitedSources(result: SearchResult, limit?: number): SearchResult["sources"] {
-  return limit === undefined ? result.sources : result.sources.slice(0, limit);
-}
-
-async function runAuthStatus(deps: CliDependencies): Promise<CliOutput> {
+async function runAuthStatus(deps: CliDependencies): Promise<CliOutcome> {
   const cached = await deps.loadToken();
   if (cached) {
     return { exitCode: 0, payload: { ok: true, authed: true, source: "cached" } };
@@ -193,7 +196,7 @@ async function runSearch(
   args: AskArguments | DeepArguments,
   kind: "ask" | "deep",
   deps: CliDependencies,
-): Promise<CliOutput> {
+): Promise<CliOutcome> {
   const timeout = createTimeoutSignal(kind);
   try {
     let auth: StoredToken;
@@ -222,13 +225,7 @@ async function runSearch(
       kind === "deep" ? writeDeepProgress : undefined,
     );
 
-    const payload: Record<string, unknown> = {
-      ok: true,
-      answer: result.answer,
-      sources: limitedSources(result, args.limit),
-    };
-    if (result.displayModel !== undefined) payload.displayModel = result.displayModel;
-    if (result.uuid !== undefined) payload.uuid = result.uuid;
+    const payload = buildSearchPayload(result, args.limit);
     return { exitCode: 0, payload };
   } catch (error) {
     return { exitCode: 1, payload: failurePayload(error) };
@@ -237,10 +234,12 @@ async function runSearch(
   }
 }
 
-export async function runCli(
-  argv: readonly string[] = process.argv.slice(2),
-  deps: CliDependencies = defaultDependencies,
-): Promise<CliOutput> {
+type CliOutcome = {
+  exitCode: number;
+  payload: Record<string, unknown>;
+};
+
+async function runCliInner(argv: readonly string[], deps: CliDependencies): Promise<CliOutcome> {
   try {
     const parsed = parseCliArguments(argv);
     if (parsed.subcommand === "auth-status") {
@@ -255,9 +254,18 @@ export async function runCli(
   }
 }
 
+export async function runCli(
+  argv: readonly string[] = process.argv.slice(2),
+  deps: CliDependencies = defaultDependencies,
+): Promise<CliOutput> {
+  const outcome = await runCliInner(argv, deps);
+  return { ...outcome, json: argv.includes("--json") };
+}
+
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const result = await runCli(argv);
-  process.stdout.write(`${JSON.stringify(result.payload)}\n`);
+  const text = result.json ? JSON.stringify(result.payload) : await renderToon(result.payload);
+  process.stdout.write(`${text}\n`);
   if (result.exitCode !== 0) {
     process.exitCode = result.exitCode;
   }

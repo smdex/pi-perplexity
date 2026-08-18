@@ -72,6 +72,8 @@ def build_node_jiti_command(
         str(home / "src/cli.ts"),
         subcommand,
         args_json,
+        # The CLI defaults to TOON output; the adapter's contract is JSON.
+        "--json",
     ]
 
 

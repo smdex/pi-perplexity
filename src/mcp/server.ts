@@ -24,10 +24,15 @@ const recencySchema = z
   .enum(["hour", "day", "week", "month", "year"])
   .describe("Filter results by age: hour, day, week, month, or year");
 
+const formatSchema = z
+  .enum(["toon", "json"])
+  .describe("Output serialization: TOON (default, token-efficient) or JSON");
+
 export const searchInput = z.object({
   query: z.string().min(1).describe("The search query"),
   recency: recencySchema.optional(),
   limit: z.number().int().min(1).max(50).optional().describe("Maximum number of sources to include (1-50)"),
+  format: formatSchema.optional(),
 });
 
 export const deepInput = searchInput.extend({
@@ -57,6 +62,7 @@ function toSearchInput(args: z.infer<typeof searchInput>) {
     query: args.query,
     ...(args.recency !== undefined ? { recency: args.recency } : {}),
     ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    ...(args.format !== undefined ? { format: args.format } : {}),
   };
 }
 
@@ -65,6 +71,7 @@ function toDeepInput(args: z.infer<typeof deepInput>) {
     query: args.query,
     ...(args.recency !== undefined ? { recency: args.recency } : {}),
     ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    ...(args.format !== undefined ? { format: args.format } : {}),
     ...(args.model !== undefined ? { model: args.model } : {}),
   };
 }

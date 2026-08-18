@@ -104,8 +104,17 @@ The derivation restores only the runtime dependencies (`@prefecthq/fastmcp-ts`, 
 
 | Tool | Description |
 |---|---|
-| `perplexity_search` | Web search with a synthesized answer and numbered source citations. Params: `query` (required), `recency` (`hour`\|`day`\|`week`\|`month`\|`year`), `limit` (1–50). |
+| `perplexity_search` | Web search with a synthesized answer and numbered source citations. Params: `query` (required), `recency` (`hour`\|`day`\|`week`\|`month`\|`year`), `limit` (1–50), `format` (`toon`\|`json`). |
 | `perplexity_deep` | Longer-running research using the `pplx_alpha` model (overridable per call via `model`), with a longer timeout and progress notifications. Same params as `perplexity_search` plus optional `model`. |
+
+### Output format (TOON)
+
+Success output is serialized as [TOON](https://toonformat.dev) (Token-Oriented Object Notation) by default — compact and token-efficient for LLM consumers. JSON is available on explicit request:
+
+- **CLI**: pass `--json` (anywhere in the arguments); without it, `ask`/`deep`/`auth-status` print TOON.
+- **MCP**: pass `format: "json"` in the tool call; the default is `format: "toon"`.
+
+If `TOON_TRU_BIN` is set, the JSON payload is piped through that binary instead (JSON on stdin, TOON on stdout — e.g. your local `tru`/`toon` wrapper). If the binary is missing, fails, or times out (10s), output falls back to the built-in encoder with a warning on stderr.
 
 Both tools always run incognito. Authentication is non-interactive under MCP: if no cached token, env credential, or macOS desktop token is available, the tool returns a readable error directing you to run `pi /perplexity-login`.
 

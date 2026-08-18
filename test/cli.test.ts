@@ -68,6 +68,7 @@ describe("cli", () => {
 
     expect(result).toEqual({
       exitCode: 0,
+      json: false,
       payload: {
         ok: true,
         answer: "A fixture answer",
@@ -76,6 +77,26 @@ describe("cli", () => {
         uuid: "fixture-uuid",
       },
     });
+  });
+
+  test("--json flag is accepted anywhere and reflected in the output", async () => {
+    expect(parseCliArguments(["--json", "ask", '{"query":"hello"}'])).toMatchObject({
+      subcommand: "ask",
+      json: true,
+    });
+    expect(parseCliArguments(["ask", '{"query":"hello"}', "--json"])).toMatchObject({
+      subcommand: "ask",
+      rawArgs: '{"query":"hello"}',
+      json: true,
+    });
+    expect(parseCliArguments(["ask", '{"query":"hello"}']).json).toBe(undefined);
+
+    const result = await runCli(
+      ["ask", JSON.stringify({ query: "hello" }), "--json"],
+      dependencies({ searchPerplexity: async () => ({ answer: "a", sources: [] }) }),
+    );
+    expect(result.json).toBe(true);
+    expect(result.exitCode).toBe(0);
   });
 
   test("deep defaults to pplx_alpha and passes recency and model overrides", async () => {

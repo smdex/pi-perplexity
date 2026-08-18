@@ -2,8 +2,10 @@
  * MCP tool handlers for Perplexity search and deep research.
  *
  * These are the in-process twins of {@link ../cli.ts}'s `runSearch` (which the
- * Hermes plugin drives via subprocess JSON). They reuse the same auth → search →
- * format pipeline, but run inside the MCP server process with no subprocess.
+ * Hermes plugin drives via subprocess JSON). They reuse the same auth → search
+ * pipeline, but run inside the MCP server process with no subprocess. Success
+ * results are serialized as TOON by default (JSON via the `format` parameter),
+ * mirroring the CLI's TOON-by-default / `--json` contract.
  *
  * fastmcp-ts v1.5.0 does not surface an MCP client cancellation signal to tool
  * handlers (see docs/research-mcp-server.md), so each handler creates its own
@@ -12,20 +14,23 @@
  * propagated; only the per-tool timeout aborts in-flight work.
  */
 import { authenticate } from "../auth/login.js";
-import { formatForLLM } from "../search/format.js";
 import { searchPerplexity } from "../search/client.js";
+import { buildSearchPayload } from "../search/payload.js";
 import { AuthError, SearchError, type StoredToken } from "../search/types.js";
+import { renderToon } from "../format/toon.js";
 import { errorMessage } from "../util.js";
 
 const DEFAULT_ASK_TIMEOUT_MS = 90_000;
 const DEFAULT_DEEP_TIMEOUT_MS = 600_000;
 
 export type Recency = "hour" | "day" | "week" | "month" | "year";
+export type OutputFormat = "toon" | "json";
 
 export interface SearchToolInput {
   query: string;
   recency?: Recency;
   limit?: number;
+  format?: OutputFormat;
 }
 
 export interface DeepToolInput extends SearchToolInput {
@@ -39,16 +44,22 @@ export interface ToolModelConfig {
   deepModel: string;
 }
 
+export type PayloadSerializer = (payload: Record<string, unknown>, format: OutputFormat) => Promise<string>;
+
 export interface ToolDeps {
   authenticate: typeof authenticate;
   searchPerplexity: typeof searchPerplexity;
-  formatForLLM: typeof formatForLLM;
+  serialize: PayloadSerializer;
+}
+
+async function serializePayload(payload: Record<string, unknown>, format: OutputFormat): Promise<string> {
+  return format === "json" ? JSON.stringify(payload) : renderToon(payload);
 }
 
 const defaultDeps: ToolDeps = {
   authenticate,
   searchPerplexity,
-  formatForLLM,
+  serialize: serializePayload,
 };
 
 export type ProgressLogger = (message: string) => void | Promise<void>;
@@ -108,7 +119,7 @@ async function runTool(
         : undefined,
     );
 
-    return deps.formatForLLM(result, args.limit);
+    return await deps.serialize(buildSearchPayload(result, args.limit), args.format ?? "toon");
   } catch (error) {
     return failureText(error);
   } finally {
@@ -116,7 +127,7 @@ async function runTool(
   }
 }
 
-/** Handler for the `perplexity_search` MCP tool. Returns formatted text or a readable error string. */
+/** Handler for the `perplexity_search` MCP tool. Returns serialized output or a readable error string. */
 export async function runSearchTool(
   args: SearchToolInput,
   cfg: ToolModelConfig,

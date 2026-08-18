@@ -28,7 +28,7 @@ buildNpmPackage {
 
   # Recompute with `nix build .#pi-perplexity-mcp`; the first run reports the
   # correct sha256 when this placeholder fails to match.
-  npmDepsHash = "sha256-VrfzQGBAl66Ec92CBSKyanKy2LmguCe9NaF95iEfCMw=";
+  npmDepsHash = "sha256-TYDr2XL3uX1YegH+0WB7tsgjOz+jjymzcE6oq6+6ahs=";
 
   dontNpmBuild = true;
   npmFlags = [

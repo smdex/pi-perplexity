@@ -4,6 +4,7 @@ import {
   failureText,
   runDeepTool,
   runSearchTool,
+  type OutputFormat,
   type ToolDeps,
   type ToolModelConfig,
 } from "../../src/mcp/tools.js";
@@ -11,11 +12,30 @@ import { AuthError, SearchError, type SearchResult, type StoredToken } from "../
 
 const CFG: ToolModelConfig = { model: "pplx_pro_upgraded", deepModel: "pplx_alpha" };
 
-function deps(overrides: Partial<ToolDeps> = {}): ToolDeps {
+const RESULT: SearchResult = {
+  answer: "answer",
+  sources: [
+    { name: "One", url: "https://one.example" },
+    { name: "Two", url: "https://two.example" },
+  ],
+};
+
+interface SerializeCall {
+  payload: Record<string, unknown>;
+  format: OutputFormat;
+}
+
+function deps(
+  overrides: Partial<ToolDeps> = {},
+  calls?: SerializeCall[],
+): ToolDeps {
   return {
     authenticate: async () => ({ type: "oauth", access: "fixture-token" }) satisfies StoredToken,
-    searchPerplexity: async () => ({ answer: "answer", sources: [] }) satisfies SearchResult,
-    formatForLLM: (result, limit?) => `FMT:${result.answer}:${limit ?? "-"}`,
+    searchPerplexity: async () => RESULT,
+    serialize: async (payload, format) => {
+      calls?.push({ payload, format });
+      return `${format}:${payload.answer}:${(payload.sources as unknown[]).length}`;
+    },
     ...overrides,
   };
 }
@@ -37,14 +57,20 @@ describe("failureText", () => {
 });
 
 describe("runSearchTool", () => {
-  test("returns formatted answer on success", async () => {
-    const out = await runSearchTool({ query: "hello" }, CFG, deps());
-    expect(out).toBe("FMT:answer:-");
+  test("serializes the structured payload as toon by default", async () => {
+    const calls: SerializeCall[] = [];
+    const out = await runSearchTool({ query: "hello" }, CFG, deps({}, calls));
+    expect(out).toBe("toon:answer:2");
+    expect(calls[0]?.format).toBe("toon");
+    expect(calls[0]?.payload).toMatchObject({ ok: true, answer: "answer" });
   });
 
-  test("honors source limit", async () => {
-    const out = await runSearchTool({ query: "hello", limit: 3 }, CFG, deps());
-    expect(out).toBe("FMT:answer:3");
+  test("honors source limit and json format", async () => {
+    const calls: SerializeCall[] = [];
+    const out = await runSearchTool({ query: "hello", limit: 1, format: "json" }, CFG, deps({}, calls));
+    expect(out).toBe("json:answer:1");
+    expect(calls[0]?.format).toBe("json");
+    expect((calls[0]?.payload.sources as unknown[]).length).toBe(1);
   });
 
   test("uses configured model and passes recency", async () => {
@@ -66,9 +92,11 @@ describe("runSearchTool", () => {
     const out = await runSearchTool(
       { query: "q" },
       CFG,
-      deps({ authenticate: async () => {
-        throw new AuthError("NO_TOKEN", "no token");
-      } }),
+      deps({
+        authenticate: async () => {
+          throw new AuthError("NO_TOKEN", "no token");
+        },
+      }),
     );
     expect(out).toContain("Authentication failed");
     expect(out).toContain("perplexity-login --force");
@@ -78,9 +106,11 @@ describe("runSearchTool", () => {
     const out = await runSearchTool(
       { query: "q" },
       CFG,
-      deps({ searchPerplexity: async () => {
-        throw new SearchError("NETWORK", "boom");
-      } }),
+      deps({
+        searchPerplexity: async () => {
+          throw new SearchError("NETWORK", "boom");
+        },
+      }),
     );
     expect(out).toContain("Perplexity search failed");
     expect(out).toContain("boom");
@@ -93,10 +123,12 @@ describe("runDeepTool", () => {
     await runDeepTool(
       { query: "q" },
       CFG,
-      deps({ searchPerplexity: async (params) => {
-        captured = params;
-        return { answer: "d", sources: [] };
-      } }),
+      deps({
+        searchPerplexity: async (params) => {
+          captured = params;
+          return { answer: "d", sources: [] };
+        },
+      }),
     );
     expect(captured?.model).toBe("pplx_alpha");
   });
@@ -106,10 +138,12 @@ describe("runDeepTool", () => {
     await runDeepTool(
       { query: "q", model: "custom" },
       CFG,
-      deps({ searchPerplexity: async (params) => {
-        captured = params;
-        return { answer: "d", sources: [] };
-      } }),
+      deps({
+        searchPerplexity: async (params) => {
+          captured = params;
+          return { answer: "d", sources: [] };
+        },
+      }),
     );
     expect(captured?.model).toBe("custom");
   });

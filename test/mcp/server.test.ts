@@ -31,6 +31,12 @@ describe("searchInput schema", () => {
     expect(() => searchInput.parse({ query: "x", recency: "decade" })).toThrow();
   });
 
+  test("accepts format toon or json, rejects anything else", () => {
+    expect(searchInput.parse({ query: "x", format: "json" })).toMatchObject({ format: "json" });
+    expect(searchInput.parse({ query: "x", format: "toon" })).toMatchObject({ format: "toon" });
+    expect(() => searchInput.parse({ query: "x", format: "yaml" })).toThrow();
+  });
+
   test("rejects out-of-range or non-integer limit", () => {
     expect(() => searchInput.parse({ query: "x", limit: 0 })).toThrow();
     expect(() => searchInput.parse({ query: "x", limit: 51 })).toThrow();

@@ -62,6 +62,11 @@ describe("buildAskBody — new thread", () => {
     expect(params.is_incognito).toBe(false);
   });
 
+  it("applies recency only when supplied", () => {
+    expect(buildAskBody({ query: "q", recency: "week" }).params.search_recency_filter).toBe("week");
+    expect("search_recency_filter" in buildAskBody({ query: "q" }).params).toBe(false);
+  });
+
   it("attachments land in params.attachments (s3 urls only)", () => {
     const { params } = buildAskBody({ query: "q", attachments: ["https://s3/x.txt"] });
     expect(params.attachments).toEqual(["https://s3/x.txt"]);

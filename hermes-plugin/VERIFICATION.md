@@ -8,14 +8,12 @@ npm test
 python3 hermes-plugin/test_smoke.py
 ```
 
-The CLI can be smoke-tested without interactive login when valid local credentials are already configured:
+The standalone CLI can be exercised with existing cookie auth:
 
 ```bash
-node --no-deprecation \
-  --import ./node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-register.mjs \
-  src/cli.ts ask '{"query":"What is 2+2?","limit":1}'
+bun cli/src/index.ts ask --json "What is two plus two?"
+bun cli/src/index.ts models --json --all
+bun cli/src/index.ts connectors --json
 ```
 
-For a live-load check, install the plugin into Hermes' user plugin directory, enable it, and verify `perplexity_ask` and `perplexity_deep` appear. Remove the temporary symlink and disable the plugin after the check.
-
-Do not include credentials, account-specific captures, or machine-specific absolute paths in verification notes.
+For a live-load check, install and enable the plugin in Hermes' user plugin directory, then start a new session and verify `perplexity_ask` and `perplexity_research` appear. Never include credentials, account-specific captures, or machine-specific paths in verification notes.

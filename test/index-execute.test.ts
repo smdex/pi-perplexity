@@ -54,7 +54,7 @@ describe("perplexity_search execute", () => {
       resolveDefaultModel,
       saveConfig: mock(async () => undefined),
     }));
-    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})) }));
+    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})), restPostJson: mock(async () => ({})) }));
 
     const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
 
@@ -115,7 +115,7 @@ describe("perplexity_search execute", () => {
       resolveDefaultModel: mock(() => "gpt54"),
       saveConfig: mock(async () => undefined),
     }));
-    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})) }));
+    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})), restPostJson: mock(async () => ({})) }));
 
     const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
     const threadsMod = await import(`../src/auth/threads.js?test=${crypto.randomUUID()}`);
@@ -170,6 +170,7 @@ describe("perplexity_search execute", () => {
     mock.module("../src/search/client.js", () => ({
       searchPerplexity: mock(async () => ({})),
       restGetJson: mock(async () => ({})),
+      restPostJson: mock(async () => ({})),
     }));
 
     const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
@@ -207,7 +208,7 @@ describe("perplexity_search execute", () => {
       resolveDefaultModel,
       saveConfig: mock(async () => undefined),
     }));
-    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})) }));
+    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})), restPostJson: mock(async () => ({})) }));
 
     const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
 

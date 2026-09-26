@@ -136,6 +136,7 @@ export interface SearchParams {
   model: string;
   /** Continue an existing conversation: last entry uuid + its read-write token. */
   followup?: { lastBackendUuid: string; readWriteToken: string };
+  attachments?: string[];
 }
 
 export type SearchProgress = (event: StreamEvent, snapshot: StreamEvent) => void;
@@ -248,7 +249,7 @@ function buildRequestBody(params: SearchParams): Record<string, unknown> {
     mode: "copilot",
     model_preference: params.model,
     sources: ["web"],
-    attachments: [],
+    attachments: params.attachments ?? [],
     frontend_uuid: randomUUID(),
     // NOTE: frontend_context_uuid is deliberately NOT set on first messages
     // (verified pplx CLI contract: fresh threads omit it; follow-ups too).
@@ -321,6 +322,43 @@ function mapHttpError(status: number): SearchError {
  * GET a /rest/* JSON endpoint with the same credentials + Cloudflare-safe
  * transport (used by the live model catalog). Throws Error on non-2xx.
  */
+export async function restPostJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  let result: { status: number; bodyText: string; stream?: ReadableStream<Uint8Array> };
+  try {
+    result = await exchange(url, headers, JSON.stringify(body), signal);
+  } catch (error) {
+    throw new Error(`POST ${new URL(url).pathname} failed: ${errorMessage(error)}`);
+  }
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(`POST ${new URL(url).pathname} returned HTTP ${result.status}.`);
+  }
+  let bodyText = result.bodyText;
+  if (result.stream) {
+    const reader = result.stream.getReader();
+    const chunks: Uint8Array[] = [];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    bodyText = new TextDecoder().decode(Buffer.concat(chunks));
+  }
+  try {
+    return JSON.parse(bodyText) as unknown;
+  } catch {
+    throw new Error(`POST ${new URL(url).pathname} returned non-JSON body.`);
+  }
+}
+
 export async function restGetJson(
   credentials: AuthCredentials,
   path: string,

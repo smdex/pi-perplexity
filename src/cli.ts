@@ -5,6 +5,7 @@ import { extractFromDesktopApp, authenticate, type AuthCredentials } from "./aut
 import { loadToken } from "./auth/storage.js";
 import { loadConfig, resolveDefaultModel } from "./config.js";
 import { searchPerplexity } from "./search/client.js";
+import { uploadAttachments } from "./search/upload.js";
 import { AuthError, SearchError, type SearchResult } from "./search/types.js";
 import { errorMessage } from "./util.js";
 
@@ -18,6 +19,7 @@ export interface AskArguments {
   query: string;
   recency?: Recency;
   limit?: number;
+  files?: string[];
 }
 
 export interface DeepArguments extends AskArguments {
@@ -26,7 +28,7 @@ export interface DeepArguments extends AskArguments {
 
 export interface CliArguments {
   subcommand: "ask" | "deep" | "auth-status";
-  rawArgs?: string;
+  search?: AskArguments | DeepArguments;
 }
 
 export interface CliOutput {
@@ -41,6 +43,7 @@ export interface CliDependencies {
   loadConfig: typeof loadConfig;
   resolveDefaultModel: typeof resolveDefaultModel;
   searchPerplexity: typeof searchPerplexity;
+  uploadAttachments: typeof uploadAttachments;
 }
 
 const defaultDependencies: CliDependencies = {
@@ -50,6 +53,7 @@ const defaultDependencies: CliDependencies = {
   loadConfig,
   resolveDefaultModel,
   searchPerplexity,
+  uploadAttachments,
 };
 
 function invalidArguments(message: string): Error {
@@ -57,78 +61,54 @@ function invalidArguments(message: string): Error {
 }
 
 export function parseCliArguments(argv: readonly string[]): CliArguments {
-  const [subcommand, rawArgs, ...extra] = argv;
-  if (extra.length > 0) {
-    throw invalidArguments("expected one JSON argument");
-  }
-
+  const [subcommand, ...tokens] = argv;
   if (subcommand !== "ask" && subcommand !== "deep" && subcommand !== "auth-status") {
     throw invalidArguments("subcommand must be ask, deep, or auth-status");
   }
-
-  if (subcommand === "auth-status" && rawArgs !== undefined) {
-    throw invalidArguments("auth-status does not accept arguments");
+  if (subcommand === "auth-status") {
+    if (tokens.length) throw invalidArguments("auth-status does not accept arguments");
+    return { subcommand };
   }
 
-  return { subcommand, ...(rawArgs !== undefined ? { rawArgs } : {}) };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function parseSearchArguments(rawArgs: string | undefined, command: "ask" | "deep"): AskArguments | DeepArguments {
-  if (rawArgs === undefined) {
-    throw invalidArguments(`${command} requires a JSON object argument`);
-  }
-
-  let value: unknown;
-  try {
-    value = JSON.parse(rawArgs) as unknown;
-  } catch (error) {
-    throw invalidArguments(`arguments are not valid JSON: ${errorMessage(error)}`);
-  }
-
-  if (!isRecord(value)) {
-    throw invalidArguments(`${command} arguments must be a JSON object`);
-  }
-
-  if (typeof value.query !== "string" || value.query.trim().length === 0) {
-    throw invalidArguments("query must be a non-empty string");
-  }
-
-  const result: AskArguments | DeepArguments = { query: value.query };
-
-  if (value.recency !== undefined) {
-    if (typeof value.recency !== "string" || !(RECENCIES as readonly string[]).includes(value.recency)) {
-      throw invalidArguments("recency must be hour, day, week, month, or year");
+  const query: string[] = [];
+  const files: string[] = [];
+  const values: Record<string, string> = {};
+  const allowed = subcommand === "deep" ? ["recency", "limit", "attach", "model"] : ["recency", "limit", "attach"];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (!token.startsWith("--")) { query.push(token); continue; }
+    const equal = token.indexOf("=");
+    const name = token.slice(2, equal < 0 ? undefined : equal);
+    if (!allowed.includes(name)) throw invalidArguments(`unknown flag: --${name}`);
+    const value = equal < 0 ? tokens[++i] : token.slice(equal + 1);
+    if (value === undefined || value.startsWith("--")) throw invalidArguments(`--${name} requires a value`);
+    if (name === "attach") {
+      const paths = value.split(",").map((path) => path.trim()).filter(Boolean);
+      if (!paths.length) throw invalidArguments("--attach requires at least one file path");
+      files.push(...paths);
+    } else {
+      if (values[name] !== undefined) throw invalidArguments(`--${name} may only be specified once`);
+      values[name] = value;
     }
-    result.recency = value.recency as Recency;
   }
-
-  if (value.limit !== undefined) {
-    if (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > 50) {
-      throw invalidArguments("limit must be an integer from 1 to 50");
-    }
-    result.limit = value.limit;
+  const queryText = query.join(" ").trim();
+  if (!queryText) throw invalidArguments(`${subcommand} requires a non-empty query`);
+  const search: AskArguments | DeepArguments = { query: queryText };
+  if (values.recency !== undefined) {
+    if (!(RECENCIES as readonly string[]).includes(values.recency)) throw invalidArguments("recency must be hour, day, week, month, or year");
+    search.recency = values.recency as Recency;
   }
-
-  if (command === "deep" && value.model !== undefined) {
-    if (typeof value.model !== "string" || value.model.trim().length === 0) {
-      throw invalidArguments("model must be a non-empty string");
-    }
-    (result as DeepArguments).model = value.model;
+  if (values.limit !== undefined) {
+    const limit = Number(values.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw invalidArguments("limit must be an integer from 1 to 50");
+    search.limit = limit;
   }
-
-  return result;
-}
-
-export function parseAskArguments(rawArgs?: string): AskArguments {
-  return parseSearchArguments(rawArgs, "ask") as AskArguments;
-}
-
-export function parseDeepArguments(rawArgs?: string): DeepArguments {
-  return parseSearchArguments(rawArgs, "deep") as DeepArguments;
+  if (files.length) search.files = files;
+  if (subcommand === "deep" && values.model !== undefined) {
+    if (!values.model.trim()) throw invalidArguments("model must be a non-empty string");
+    (search as DeepArguments).model = values.model;
+  }
+  return { subcommand, search };
 }
 
 function authErrorPayload(error: unknown): Record<string, unknown> {
@@ -211,10 +191,14 @@ async function runSearch(
     const model = kind === "deep"
       ? (args as DeepArguments).model ?? DEEP_MODEL
       : deps.resolveDefaultModel(config);
+    const attachments = args.files?.length
+      ? await deps.uploadAttachments(args.files.map((path) => ({ path })), auth, timeout.signal)
+      : [];
     const result = await deps.searchPerplexity(
       {
         query: args.query,
         model,
+        ...(attachments.length ? { attachments } : {}),
         ...(args.recency !== undefined ? { recency: args.recency } : {}),
       },
       auth,
@@ -227,6 +211,7 @@ async function runSearch(
       answer: result.answer,
       sources: limitedSources(result, args.limit),
     };
+    if (args.files?.length) payload.attachments = args.files.map((path) => path.split(/[\\/]/).pop() ?? path);
     if (result.displayModel !== undefined) payload.displayModel = result.displayModel;
     if (result.uuid !== undefined) payload.uuid = result.uuid;
     return { exitCode: 0, payload };
@@ -246,10 +231,7 @@ export async function runCli(
     if (parsed.subcommand === "auth-status") {
       return await runAuthStatus(deps);
     }
-    if (parsed.subcommand === "deep") {
-      return await runSearch(parseDeepArguments(parsed.rawArgs), "deep", deps);
-    }
-    return await runSearch(parseAskArguments(parsed.rawArgs), "ask", deps);
+    return await runSearch(parsed.search!, parsed.subcommand as "ask" | "deep", deps);
   } catch (error) {
     return { exitCode: 1, payload: failurePayload(error) };
   }

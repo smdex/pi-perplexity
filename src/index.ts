@@ -15,6 +15,7 @@ import {
 import { loadConfig, resolveDefaultModel } from "./config.js";
 import { effectiveSourceCount, formatForLLM } from "./search/format.js";
 import { searchPerplexity } from "./search/client.js";
+import { uploadAttachments } from "./search/upload.js";
 import { renderPerplexityCall } from "./render/call.js";
 import { renderPerplexityResult } from "./render/result.js";
 import { errorMessage } from "./util.js";
@@ -38,6 +39,7 @@ export default function (pi: ExtensionAPI) {
       "Search the web using Perplexity. Pass thread (a session id) or continue=true to keep the same Perplexity conversation across calls.",
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
+      files: Type.Optional(Type.Array(Type.String({ description: "Local file path" }), { description: "Local file paths to attach; uploaded to Perplexity before searching" })),
       thread: Type.Optional(
         Type.String({
           description:
@@ -149,10 +151,15 @@ export default function (pi: ExtensionAPI) {
         const config = await loadConfig();
         const model = resolveDefaultModel(config);
 
+        const attachmentUrls = typeof params.files !== "undefined" && params.files.length
+          ? await uploadAttachments(params.files.map((path: string) => ({ path })), credentials, signal)
+          : [];
+
         const result = await searchPerplexity(
           {
             query: params.query,
             model,
+            ...(attachmentUrls.length ? { attachments: attachmentUrls } : {}),
             ...(params.recency !== undefined ? { recency: params.recency } : {}),
             ...(followup ? { followup } : {}),
           },
@@ -190,6 +197,7 @@ export default function (pi: ExtensionAPI) {
             ...(result.slug ? { thread: result.slug } : {}),
             ...(continuedSession ? { continued: continuedSession } : {}),
             authSource: credentials.source,
+            ...(params.files?.length ? { attachments: params.files.map((path: string) => path.split(/[\\/]/).pop() ?? path) } : {}),
           },
         };
       } catch (error) {

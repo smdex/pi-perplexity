@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-09-26
+
+### Added
+
+- Hermes plugin tools `perplexity_ask` and `perplexity_research` backed by the standalone CLI, with compact TOON results, source/connector catalog, recency and persistent-chat options, and `/perplexity-config` for user-selected search models.
+
+### Fixed
+
+- Node test module mocks now use `namedExports`, restoring the full test suite on Node 22.
+
 ## [0.6.0] - 2026-09-26
 
 ### Added

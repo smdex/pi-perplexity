@@ -11,6 +11,12 @@ export interface StreamEvent {
   uuid?: string;
   error_code?: string;
   error_message?: string;
+  /** Thread continuation: last entry uuid → next follow-up's last_backend_uuid (each event overwrites). */
+  backend_uuid?: string;
+  /** Read-write token for follow-ups (first non-empty wins). */
+  read_write_token?: string;
+  /** Thread URL slug — the stable session id used for --thread continuation. */
+  thread_url_slug?: string;
 }
 
 export interface StreamBlock {
@@ -44,8 +50,11 @@ export interface StreamSource {
 export interface StoredToken {
   type: "oauth";
   access?: string;
-  cookies?: string;
   email?: string;
+  /** Cookie jar captured at OTP login (session cookie et al) — sent alongside Bearer. */
+  cookies?: string[];
+  /** User-Agent the cookies were issued for (cf_clearance is UA-bound). */
+  userAgent?: string;
 }
 
 // --- Search result (output of client, input to formatter) ---
@@ -55,6 +64,11 @@ export interface SearchResult {
   sources: WebResult[];
   displayModel?: string;
   uuid?: string;
+  /** Thread URL slug — pass as `thread` to continue this conversation. */
+  slug?: string;
+  /** Follow-up credential pair (with backendUuid) captured from the stream. */
+  readWriteToken?: string;
+  backendUuid?: string;
 }
 
 // --- Error types ---

@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 
 import { AuthError, type StoredToken } from "../search/types.js";
 import { errorMessage } from "../util.js";
-import { loadToken, saveToken } from "./storage.js";
+import { loadCredentials, loadToken, saveToken, type CredentialsSource } from "./storage.js";
 import {
   BROWSER_AUTH_HELP,
   browserAuthFailureMessage,
@@ -30,6 +30,21 @@ export interface AuthenticateOptions {
   signal?: AbortSignal;
   promptForEmail?: () => Promise<string | null | undefined>;
   promptForOtp?: (email: string) => Promise<string | null | undefined>;
+}
+
+/** Resolved credentials: Bearer JWT + optional cookie jar + the UA the cookies were issued for. */
+export interface AuthCredentials {
+  jwt: string;
+  cookies: string[];
+  userAgent: string | null;
+  email: string | null;
+  source: CredentialsSource;
+}
+
+export interface EmailOtpLoginSession {
+  email: string;
+  csrfToken: string;
+  cookieHeader?: string;
 }
 
 function normalizeInput(value: string | null | undefined): string | null {
@@ -81,15 +96,19 @@ export async function saveBrowserAuthInput(input: string): Promise<StoredToken> 
   return credentials;
 }
 
+/** Headers Chrome would send on /api/auth/* — missing Origin/Referer/Sec-Fetch-*
+ * is the most likely reason a 200 OTP verification returns no session cookie. */
 function buildAuthHeaders(includeJsonContentType = false): Record<string, string> {
   return {
     Accept: "application/json",
-    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
     Origin: "https://www.perplexity.ai",
     Referer: "https://www.perplexity.ai/",
     "User-Agent": PERPLEXITY_USER_AGENT,
-    "X-App-ApiClient": "default",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
     "X-App-ApiVersion": PERPLEXITY_API_VERSION,
+    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
   };
 }
 
@@ -143,10 +162,34 @@ function extractTokenFromPayload(payload: unknown): string | null {
   return null;
 }
 
-async function loginWithEmailOtp(
+function getCookieHeader(response: AuthFetchResponse): string | null {
+  return cookieHeaderFrom(response.cookies) || null;
+}
+
+/** Distinct name=value pairs accumulated across responses (later Set-Cookie wins per name). */
+function collectCookies(existing: string[], response: AuthFetchResponse): string[] {
+  const byName = new Map<string, string>();
+  for (const cookie of existing) {
+    byName.set(cookie.slice(0, cookie.indexOf("=")), cookie);
+  }
+  for (const setCookie of response.cookies) {
+    const pair = setCookie.split(";")[0];
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    byName.set(pair.slice(0, eq), pair);
+  }
+  return [...byName.values()];
+}
+
+export async function beginEmailOtpLogin(
   email: string,
-  options: AuthenticateOptions,
-): Promise<string> {
+  options: Pick<AuthenticateOptions, "signal"> = {},
+): Promise<EmailOtpLoginSession> {
+  const normalizedEmail = normalizeInput(email);
+  if (!normalizedEmail) {
+    throw new Error("Email is required to start Perplexity OTP login.");
+  }
+
   const signal = options.signal ?? null;
 
   const csrfResponse = await fetchAuth(`${AUTH_BASE_URL}/csrf`, {
@@ -169,7 +212,7 @@ async function loginWithEmailOtp(
     throw new Error("CSRF token missing from Perplexity auth response.");
   }
 
-  const cookieHeader = cookieHeaderFrom(csrfResponse.cookies);
+  const cookieHeader = getCookieHeader(csrfResponse);
   if (!cookieHeader) {
     throw new Error(
       "Perplexity auth response did not include Set-Cookie headers required for OTP login.",
@@ -177,12 +220,14 @@ async function loginWithEmailOtp(
   }
 
   const emailHeaders = buildAuthHeaders(true);
-  emailHeaders.Cookie = cookieHeader;
+  if (cookieHeader) {
+    emailHeaders.Cookie = cookieHeader;
+  }
 
   const emailResponse = await fetchAuth(`${AUTH_BASE_URL}/signin-email`, {
     method: "POST",
     headers: emailHeaders,
-    body: JSON.stringify({ email, csrfToken }),
+    body: JSON.stringify({ email: normalizedEmail, csrfToken }),
     signal,
   });
 
@@ -190,24 +235,39 @@ async function loginWithEmailOtp(
     throwHttpFailure("Failed to send OTP email", emailResponse);
   }
 
-  const otp =
-    normalizeInput(process.env.PI_PERPLEXITY_OTP) ??
-    normalizeInput(await options.promptForOtp?.(email));
+  return {
+    email: normalizedEmail,
+    csrfToken,
+    ...(cookieHeader ? { cookieHeader } : {}),
+  };
+}
 
-  if (!otp) {
-    throw new AuthError(
-      "NO_TOKEN",
-      `OTP code is required to complete Perplexity login. ${OTP_AUTH_HELP}`,
-    );
+/**
+ * Verify the OTP. Returns the Bearer token from the body when present plus every
+ * cookie the exchange set (the session cookie may arrive as Set-Cookie instead —
+ * observed behavior differs between clients). Throws only when NEITHER is returned.
+ */
+export async function completeEmailOtpLogin(
+  session: EmailOtpLoginSession,
+  otp: string,
+  options: Pick<AuthenticateOptions, "signal"> = {},
+): Promise<{ token: string | null; cookies: string[] }> {
+  const normalizedOtp = normalizeInput(otp);
+  if (!normalizedOtp) {
+    throw new Error("OTP code is required to complete Perplexity login.");
   }
 
+  const signal = options.signal ?? null;
   const otpHeaders = buildAuthHeaders(true);
-  otpHeaders.Cookie = cookieHeader;
+  if (session.cookieHeader) {
+    otpHeaders.Cookie = session.cookieHeader;
+  }
+
 
   const otpResponse = await fetchAuth(`${AUTH_BASE_URL}/signin-otp`, {
     method: "POST",
     headers: otpHeaders,
-    body: JSON.stringify({ email, otp, csrfToken }),
+    body: JSON.stringify({ email: session.email, otp: normalizedOtp, csrfToken: session.csrfToken }),
     signal,
   });
 
@@ -216,14 +276,37 @@ async function loginWithEmailOtp(
   }
 
   const otpPayload = parseJsonResponse("OTP verification response", otpResponse);
-  const token =
-    extractTokenFromPayload(otpPayload) ??
-    extractSessionTokenFromCookieHeader(cookieHeaderFrom(otpResponse.cookies));
-  if (!token) {
-    throw new Error("Perplexity OTP response did not include a token.");
+  const token = extractTokenFromPayload(otpPayload);
+  const cookies = collectCookies(
+    (session.cookieHeader ?? "").split("; ").filter((pair) => pair.includes("=")),
+    otpResponse,
+  );
+
+  if (!token && !cookies.some((cookie) => cookie.startsWith("__Secure-next-auth.session-token="))) {
+    throw new Error("Perplexity OTP response included neither a token nor a session cookie.");
   }
 
-  return token;
+  return { token, cookies };
+}
+
+async function loginWithEmailOtp(
+  email: string,
+  options: AuthenticateOptions,
+): Promise<{ token: string | null; cookies: string[] }> {
+  const session = await beginEmailOtpLogin(email, options);
+
+  const otp =
+    normalizeInput(process.env.PI_PERPLEXITY_OTP) ??
+    normalizeInput(await options.promptForOtp?.(session.email));
+
+  if (!otp) {
+    throw new AuthError(
+      "NO_TOKEN",
+      `OTP code is required to complete Perplexity login. ${OTP_AUTH_HELP}`,
+    );
+  }
+
+  return completeEmailOtpLogin(session, otp, options);
 }
 
 /** Extract JWT from macOS Perplexity desktop app via `defaults read`. Returns null if app not installed or not logged in. */
@@ -245,29 +328,42 @@ export async function extractFromDesktopApp(): Promise<string | null> {
   }
 }
 
-/** Run auth strategy: load cached → env token/cookies → desktop extraction → email OTP. Browser paste is handled via /perplexity-login --browser. */
-export async function authenticate(options: AuthenticateOptions = {}): Promise<StoredToken> {
-  const cached = await loadToken();
+/**
+ * Run the auth strategy and return the full credential set (never just a JWT):
+ *   1. stored credentials (extension token file, enriched with the pplx CLI jar),
+ *   2. desktop-app token borrow (macOS),
+ *   3. email OTP — saves the cookie jar captured during the exchange.
+ */
+export async function authenticate(options: AuthenticateOptions = {}): Promise<AuthCredentials> {
+  const cached = await loadCredentials();
   if (cached) {
-    return cached;
+    return {
+      jwt: cached.access ?? "",
+      cookies: cached.cookies ?? [],
+      userAgent: cached.userAgent ?? null,
+      email: cached.email ?? null,
+      source: cached.cookies && cached.cookies.length > 0 ? "cookies" : "token",
+    };
   }
 
   const envCredentials = credentialsFromEnvironment();
   if (envCredentials) {
     await saveToken(envCredentials);
-    return envCredentials;
+    return {
+      jwt: envCredentials.access ?? "",
+      cookies: envCredentials.cookies ?? [],
+      userAgent: envCredentials.userAgent ?? null,
+      email: envCredentials.email ?? null,
+      source: envCredentials.cookies && envCredentials.cookies.length > 0 ? "cookies" : "token",
+    };
   }
 
   const borrowDisabled = process.env.PI_AUTH_NO_BORROW === "1";
   if (!borrowDisabled) {
     const desktopToken = await extractFromDesktopApp();
     if (desktopToken) {
-      const credentials: StoredToken = {
-        type: "oauth",
-        access: desktopToken,
-      };
-      await saveToken(credentials);
-      return credentials;
+      await saveToken({ type: "oauth", access: desktopToken });
+      return { jwt: desktopToken, cookies: [], userAgent: null, email: null, source: "token" };
     }
   }
 
@@ -281,10 +377,10 @@ export async function authenticate(options: AuthenticateOptions = {}): Promise<S
     );
   }
 
-  let otpToken: string;
+  let otpResult: { token: string | null; cookies: string[] };
 
   try {
-    otpToken = await loginWithEmailOtp(email, options);
+    otpResult = await loginWithEmailOtp(email, options);
   } catch (error) {
     if (error instanceof AuthError) {
       throw error;
@@ -298,9 +394,23 @@ export async function authenticate(options: AuthenticateOptions = {}): Promise<S
 
   const credentials: StoredToken = {
     type: "oauth",
-    access: otpToken,
+    access: otpResult.token ?? "",
     email,
   };
+  if (otpResult.cookies.length > 0) {
+    credentials.cookies = otpResult.cookies;
+  }
   await saveToken(credentials);
-  return credentials;
+  return {
+    jwt: otpResult.token ?? "",
+    cookies: otpResult.cookies,
+    userAgent: null, // OTP ran under the CLI-style UA; no browser UA was captured
+    email,
+    source: "otp",
+  };
+}
+
+/** Force-refresh helper used by /perplexity-login --force: forget everything, re-auth. */
+export async function hasStoredToken(): Promise<boolean> {
+  return (await loadToken()) !== null;
 }

@@ -84,6 +84,11 @@ export function formatForLLM(result: SearchResult, limit?: number): string {
   if (result.uuid) {
     metaLines.push(`Request ID: ${result.uuid}`);
   }
+  if (result.slug) {
+    metaLines.push(
+      `Session ID: ${result.slug} — pass thread="${result.slug}" (or continue=true for the latest session) on the next perplexity_search call to continue this conversation`,
+    );
+  }
 
   return [
     "## Answer",

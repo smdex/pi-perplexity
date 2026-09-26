@@ -19,7 +19,7 @@ const originalCookie = process.env.PI_PERPLEXITY_COOKIE;
 const REAL_JWE_TOKEN =
   "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAA";
 
-const CSRF_TOKEN = "0e4f8cc491e3197788492604ad32577f2022747fe30e0f51ba3ba235f07cc9ee";
+const CSRF_TOKEN = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
 const TEST_EMAIL = "user@test.com";
 const TEST_OTP = "9f3e2-knzol";
@@ -64,7 +64,8 @@ function mockStorage() {
   const clearTokenMock = mock(async () => undefined);
 
   mock.module("../../src/auth/storage.js", () => ({
-    loadToken: loadTokenMock,
+    loadToken: mock(async () => null),
+    loadCredentials: loadTokenMock,
     saveToken: saveTokenMock,
     clearToken: clearTokenMock,
   }));
@@ -121,6 +122,34 @@ afterEach(() => {
 });
 
 describe("OTP login flow (from real captured responses)", () => {
+  test("beginEmailOtpLogin and completeEmailOtpLogin support a split two-step flow", async () => {
+    process.env.PI_AUTH_NO_BORROW = "1";
+
+    const { fetchMock, calls } = buildReplayFetchMock();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { beginEmailOtpLogin, completeEmailOtpLogin } = await importLoginModule();
+
+    const session = await beginEmailOtpLogin(TEST_EMAIL);
+    expect(session.email).toBe(TEST_EMAIL);
+    expect(session.csrfToken).toBe(CSRF_TOKEN);
+
+    const { token, cookies } = await completeEmailOtpLogin(session, TEST_OTP);
+
+    expect(token).toBe(REAL_JWE_TOKEN);
+    expect(Array.isArray(cookies)).toBe(true);
+    expect(calls).toHaveLength(3);
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({
+      email: TEST_EMAIL,
+      csrfToken: CSRF_TOKEN,
+    });
+    expect(JSON.parse(String(calls[2].init?.body))).toEqual({
+      email: TEST_EMAIL,
+      otp: TEST_OTP,
+      csrfToken: CSRF_TOKEN,
+    });
+  });
+
   test("full flow: CSRF → email → OTP, extracts JWE token from response body", async () => {
     process.env.PI_AUTH_NO_BORROW = "1";
 
@@ -130,12 +159,12 @@ describe("OTP login flow (from real captured responses)", () => {
 
     const { authenticate } = await importLoginModule();
 
-    const token = await authenticate({
+    const credentials = await authenticate({
       promptForEmail: async () => TEST_EMAIL,
       promptForOtp: async () => TEST_OTP,
     });
 
-    expect(token.access).toBe(REAL_JWE_TOKEN);
+    expect(credentials.jwt).toBe(REAL_JWE_TOKEN);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(saveTokenMock).toHaveBeenCalledTimes(1);
 
@@ -214,9 +243,9 @@ describe("OTP login flow (from real captured responses)", () => {
     const promptForEmail = mock(async () => "should-not-be-called@test.com");
     const promptForOtp = mock(async () => "should-not-be-called");
 
-    const token = await authenticate({ promptForEmail, promptForOtp });
+    const credentials = await authenticate({ promptForEmail, promptForOtp });
 
-    expect(token.access).toBe(REAL_JWE_TOKEN);
+    expect(credentials.jwt).toBe(REAL_JWE_TOKEN);
     expect(promptForEmail).toHaveBeenCalledTimes(0);
     expect(promptForOtp).toHaveBeenCalledTimes(0);
   });

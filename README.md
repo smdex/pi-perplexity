@@ -19,6 +19,29 @@ Or from GitHub:
 pi install github:ivanrvpereira/pi-perplexity
 ```
 
+## Hermes plugin
+
+This repository also includes an opt-in [Hermes Agent](https://github.com/NousResearch/hermes-agent) adapter. It exposes the existing subscription-backed pi-perplexity implementation as two Hermes tools: `perplexity_ask` for a normal search and `perplexity_deep` for long-running research (default model: `pplx_alpha`). The adapter is dependency-free and invokes the repository's TypeScript CLI rather than porting the search protocol to Python.
+
+Install it from a pi-perplexity checkout:
+
+```bash
+mkdir -p ~/.hermes/plugins
+ln -s "$PWD/hermes-plugin" ~/.hermes/plugins/pi-perplexity
+# Or copy it instead:
+# cp -R "$PWD/hermes-plugin" ~/.hermes/plugins/pi-perplexity
+export PI_PERPLEXITY_HOME="$PWD"
+hermes plugins enable pi-perplexity
+```
+
+Set `PI_PERPLEXITY_HOME` to the checkout containing `src/cli.ts` and `node_modules`; it is required when the plugin is copied and recommended for a symlink as well. The plugin is opt-in and takes effect in a new Hermes session. Its runtime knobs are:
+
+| Variable | Description |
+|---|---|
+| `PI_PERPLEXITY_NODE` | Node executable to run (defaults to `node`) |
+| `PI_PERPLEXITY_ASK_TIMEOUT_MS` | Normal-search subprocess timeout (defaults to 90,000 ms) |
+| `PI_PERPLEXITY_DEEP_TIMEOUT_MS` | Deep-research subprocess timeout (defaults to 600,000 ms) |
+
 ## Authentication
 
 Run login once:

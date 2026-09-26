@@ -4,3 +4,8 @@ data: "text":"partial"}
 data: {"status":"COMPLETED","final":true,"text":"final answer","display_model":"pplx_pro_upgraded","uuid":"req-basic","sources_list":[{"title":"Example","url":"https://example.com","snippet":"Example source","date":"2026-02-15T12:00:00.000Z"}]}
 
 data: [DONE]
+
+data: {"status":"COMPLETED","final":true,"text":"final answer with thread","display_model":"pplx_pro_upgraded","uuid":"req-thread","thread_url_slug":"t0000000-0000-4000-8000-000000000003","read_write_token":"rw-thread","backend_uuid":"be-thread","sources_list":[{"title":"Example","url":"https://example.com","snippet":"Example source","date":"2026-02-15T12:00:00.000Z"}]}
+
+data: [DONE]
+

@@ -1,0 +1,9 @@
+{
+  "answer": "A fixture answer",
+  "sources": [
+    {"name": "One", "url": "https://one.example"},
+    {"name": "Two", "url": "https://two.example"}
+  ],
+  "displayModel": "pplx_pro_upgraded",
+  "uuid": "fixture-uuid"
+}

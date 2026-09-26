@@ -1,0 +1,30 @@
+{
+  "name": "pplx-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "pplx": "./src/index.ts"
+  },
+  "files": [
+    "src/",
+    "skills/",
+    "test/",
+    "tsconfig.json",
+    "README.md"
+  ],
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "yargs": "^18.2.0",
+    "picocolors": "^1.1.1",
+    "clipboardy": "^5.3.2"
+  },
+  "devDependencies": {
+    "@types/yargs": "^17.0.33",
+    "bun-types": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}

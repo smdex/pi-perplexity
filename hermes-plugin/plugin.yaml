@@ -1,0 +1,4 @@
+name: pi-perplexity
+version: 0.1.0
+description: Search the web with Perplexity through the pi-perplexity extension.
+provides_tools: [perplexity_ask, perplexity_deep]

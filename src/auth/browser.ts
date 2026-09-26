@@ -131,7 +131,10 @@ function credentialsFromCookieValue(value: string): StoredToken | null {
     return null;
   }
 
-  const credentials: StoredToken = { type: "oauth", cookies };
+  const credentials: StoredToken = {
+    type: "oauth",
+    cookies: cookies.split("; ").filter((pair) => pair.includes("=")),
+  };
   const sessionToken = extractSessionTokenFromCookieHeader(cookies);
   if (sessionToken && looksLikeToken(sessionToken)) {
     credentials.access = sessionToken;
@@ -152,8 +155,9 @@ export function parseBrowserAuthInput(input: string): StoredToken | null {
 
   const cookieCredentials = credentialsFromCookieValue(normalized);
   const cookies = cookieCredentials?.cookies;
-  if (cookieCredentials && cookies && cookies.includes("=")) {
-    const hasKnownSessionToken = Boolean(extractSessionTokenFromCookieHeader(cookies));
+  if (cookieCredentials && cookies && cookies.some((pair) => pair.includes("="))) {
+    const cookieHeader = cookies.join("; ");
+    const hasKnownSessionToken = Boolean(extractSessionTokenFromCookieHeader(cookieHeader));
     if (hasKnownSessionToken) {
       return cookieCredentials;
     }

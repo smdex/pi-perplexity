@@ -3,3 +3,8 @@ node_modules/
 local_tests/
 .tmp-test/
 [Pp][Ll][Aa][Nn].[Mm][Dd]
+result
+s-01-*.json
+.serena/
+.pi-subagents/
+*.har

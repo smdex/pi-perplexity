@@ -5,14 +5,140 @@ import type { SearchResult, StoredToken, StreamEvent, WebResult } from "./types.
 import { SearchError } from "./types.js";
 import { errorMessage } from "../util.js";
 import { PERPLEXITY_USER_AGENT, PERPLEXITY_API_VERSION } from "../constants.js";
+import type { AuthCredentials } from "../auth/login.js";
 
-const PERPLEXITY_ENDPOINT = "https://www.perplexity.ai/rest/sse/perplexity_ask";
+const ORIGIN = "https://www.perplexity.ai";
+const PERPLEXITY_ENDPOINT = `${ORIGIN}/rest/sse/perplexity_ask`;
+
+function streamFromText(text: string): ReadableStream<Uint8Array> {
+  const bytes = new TextEncoder().encode(text);
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+const MAX_BUN_STDOUT = 50 * 1024 * 1024;
+
+/**
+ * Execute an HTTP request via a Bun subprocess.
+ * Pi loads extensions under Node/jiti whose fetch gets Cloudflare-challenged.
+ * Bun's native fetch has a different TLS fingerprint that passes.
+ */
+async function fetchViaBunRuntime(
+  url: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  signal?: AbortSignal,
+): Promise<{ status: number; bodyText: string }> {
+  const script = `
+const c = JSON.parse(await Bun.stdin.text());
+try {
+  const r = await fetch(c.url, { method: c.method, headers: c.headers, ...(c.body ? { body: c.body } : {}) });
+  const t = await r.text();
+  process.stdout.write(JSON.stringify({ s: r.status, b: t }));
+} catch (e) {
+  process.stdout.write(JSON.stringify({ s: 0, b: String(e?.message ?? e) }));
+}
+`;
+
+  // Dynamic import: spawn is only needed under Node/jiti (not Bun),
+  // and Bun's node:child_process polyfill may not export it.
+  const { spawn } = await import("node:child_process");
+
+  const stdout = await new Promise<string>((resolve, reject) => {
+    const child = spawn("bun", ["-e", script], {
+      stdio: ["pipe", "pipe", "ignore"],
+      env: { HOME: process.env.HOME, PATH: process.env.PATH },
+    });
+
+    if (signal) {
+      const onAbort = () => child.kill();
+      signal.addEventListener("abort", onAbort, { once: true });
+      child.on("close", () => signal.removeEventListener("abort", onAbort));
+    }
+
+    if (!child.stdin || !child.stdout) {
+      reject(new Error("Failed to open subprocess pipes"));
+      return;
+    }
+
+    child.stdin.write(JSON.stringify({ url, headers, body, method: body === undefined ? "GET" : "POST" }));
+    child.stdin.end();
+
+    const chunks: Buffer[] = [];
+    let totalLen = 0;
+    child.stdout.on("data", (chunk: Buffer) => {
+      totalLen += chunk.length;
+      if (totalLen <= MAX_BUN_STDOUT) {
+        chunks.push(chunk);
+      }
+    });
+
+    child.on("close", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    child.on("error", reject);
+  });
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`Bun subprocess returned invalid output: ${stdout.slice(0, 200)}`);
+  }
+
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    throw new Error("Bun subprocess response is not an object.");
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.s !== "number" || typeof obj.b !== "string") {
+    throw new Error("Bun subprocess response missing required fields.");
+  }
+
+  return { status: obj.s, bodyText: obj.b };
+}
+
+/** One shared HTTP exchange: Bun subprocess under Node/jiti, native fetch under Bun. */
+async function exchange(
+  url: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  signal?: AbortSignal,
+): Promise<{ status: number; bodyText: string; stream?: ReadableStream<Uint8Array> }> {
+  // ponytail: NODE_TEST_CONTEXT probe — node --test mocks globalThis.fetch; subprocess only for the real Node/jiti runtime
+  if (!("Bun" in globalThis) && !process.env.NODE_TEST_CONTEXT) {
+    const result = await fetchViaBunRuntime(url, headers, body, signal);
+    if (result.status === 0) throw new Error(result.bodyText);
+    return result;
+  }
+  const response = await fetch(url, {
+    ...(body !== undefined ? { method: "POST" as const } : {}),
+    headers,
+    ...(body !== undefined ? { body } : {}),
+    signal: signal ?? null,
+  });
+  return {
+    status: response.status,
+    bodyText: "",
+    ...(response.body ? { stream: response.body as ReadableStream<Uint8Array> } : {}),
+  };
+}
 
 export interface SearchParams {
   query: string;
   recency?: "hour" | "day" | "week" | "month" | "year";
   model: string;
+  /** Continue an existing conversation: last entry uuid + its read-write token. */
+  followup?: { lastBackendUuid: string; readWriteToken: string };
 }
+
+export type SearchProgress = (event: StreamEvent, snapshot: StreamEvent) => void;
 
 function normalizeUrl(url: string): string {
   const trimmed = url.trim().replace(/\/$/, "");
@@ -116,51 +242,57 @@ function buildRequestBody(params: SearchParams): Record<string, unknown> {
   const query = params.query;
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
 
+  const requestParams: Record<string, unknown> = {
+    query_str: query,
+    search_focus: "internet",
+    mode: "copilot",
+    model_preference: params.model,
+    sources: ["web"],
+    attachments: [],
+    frontend_uuid: randomUUID(),
+    // NOTE: frontend_context_uuid is deliberately NOT set on first messages
+    // (verified pplx CLI contract: fresh threads omit it; follow-ups too).
+    version: PERPLEXITY_API_VERSION,
+    language: "en-US",
+    timezone,
+    search_recency_filter: params.recency ?? null,
+    is_incognito: true,
+    use_schematized_api: true,
+    skip_search_enabled: true,
+  };
+  if (params.followup) {
+    requestParams.last_backend_uuid = params.followup.lastBackendUuid;
+    requestParams.read_write_token = params.followup.readWriteToken;
+    requestParams.query_source = "followup";
+    requestParams.followup_source = "link";
+  }
+
   return {
     query_str: query,
-    params: {
-      query_str: query,
-      search_focus: "internet",
-      mode: "copilot",
-      model_preference: params.model,
-      sources: ["web"],
-      attachments: [],
-      frontend_uuid: randomUUID(),
-      frontend_context_uuid: randomUUID(),
-      version: PERPLEXITY_API_VERSION,
-      language: "en-US",
-      timezone,
-      search_recency_filter: params.recency ?? null,
-      is_incognito: true,
-      use_schematized_api: true,
-      skip_search_enabled: true,
-    },
+    params: requestParams,
   };
 }
 
-type AuthCredentials = string | StoredToken;
-
-function buildRequestHeaders(auth: AuthCredentials, requestId: string): Record<string, string> {
-  const access = typeof auth === "string" ? auth : auth.access;
-  const cookies = typeof auth === "string" ? undefined : auth.cookies;
+function buildRequestHeaders(credentials: AuthCredentials, requestId: string): Record<string, string> {
   const headers: Record<string, string> = {
+    // Cookie jar is the primary credential (all cookies, not just the session
+    // token — cf_clearance/__cf_bm are required to pass Cloudflare).
+    Cookie: credentials.cookies.join("; "),
     "Content-Type": "application/json",
     Accept: "text/event-stream",
-    Origin: "https://www.perplexity.ai",
-    Referer: "https://www.perplexity.ai/",
-    "User-Agent": PERPLEXITY_USER_AGENT,
+    Origin: ORIGIN,
+    Referer: `${ORIGIN}/`,
+    // Replay the UA the cookies were issued for when one was captured.
+    "User-Agent": credentials.userAgent ?? PERPLEXITY_USER_AGENT,
     "X-App-ApiClient": "default",
     "X-App-ApiVersion": PERPLEXITY_API_VERSION,
     "X-Perplexity-Request-Reason": "submit",
     "X-Request-ID": requestId,
   };
-
-  if (cookies) {
-    headers.Cookie = cookies;
-  } else if (access) {
-    headers.Authorization = `Bearer ${access}`;
+  // Bearer supplements the jar when a JWT is available (desktop borrow / OTP body token).
+  if (credentials.jwt) {
+    headers.Authorization = `Bearer ${credentials.jwt}`;
   }
-
   return headers;
 }
 
@@ -168,7 +300,7 @@ function mapHttpError(status: number): SearchError {
   if (status === 401 || status === 403) {
     return new SearchError(
       "AUTH",
-      "Perplexity rejected authentication (401/403). Re-run /perplexity-login --force, or use /perplexity-login --browser if direct OTP is blocked.",
+      "Perplexity rejected authentication (401/403). Run /perplexity-login (or `pplx login` in a terminal) and retry.",
     );
   }
 
@@ -185,44 +317,85 @@ function mapHttpError(status: number): SearchError {
   );
 }
 
-/** Execute a Perplexity search: POST SSE, stream/merge events, extract answer + sources. Throws SearchError on failure. */
+/**
+ * GET a /rest/* JSON endpoint with the same credentials + Cloudflare-safe
+ * transport (used by the live model catalog). Throws Error on non-2xx.
+ */
+export async function restGetJson(
+  credentials: AuthCredentials,
+  path: string,
+  query: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const qs = new URLSearchParams(query).toString();
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    Cookie: credentials.cookies.join("; "),
+    "User-Agent": credentials.userAgent ?? PERPLEXITY_USER_AGENT,
+    "X-App-ApiClient": "default",
+    "X-App-ApiVersion": PERPLEXITY_API_VERSION,
+  };
+  if (credentials.jwt) headers.Authorization = `Bearer ${credentials.jwt}`;
+
+  let result: { status: number; bodyText: string };
+  try {
+    result = await exchange(`${ORIGIN}${path}${qs ? `?${qs}` : ""}`, headers, undefined, signal);
+  } catch (error) {
+    throw new Error(`GET ${path} failed: ${errorMessage(error)}`);
+  }
+  if (result.status === 401 || result.status === 403) {
+    throw new SearchError("AUTH", `GET ${path} rejected authentication (HTTP ${result.status}).`);
+  }
+  if (result.status !== 200) {
+    throw new Error(`GET ${path} returned HTTP ${result.status}.`);
+  }
+  try {
+    return JSON.parse(result.bodyText) as unknown;
+  } catch {
+    throw new Error(`GET ${path} returned non-JSON body.`);
+  }
+}
+
+/** Execute a Perplexity search: POST SSE, stream/merge events, extract answer + sources + thread state. Throws SearchError on failure. */
 export async function searchPerplexity(
   params: SearchParams,
-  auth: AuthCredentials,
+  credentials: AuthCredentials,
   signal?: AbortSignal,
+  onProgress?: SearchProgress,
 ): Promise<SearchResult> {
   const requestId = randomUUID();
   const requestBody = buildRequestBody(params);
-  const requestHeaders = buildRequestHeaders(auth, requestId);
+  const requestHeaders = buildRequestHeaders(credentials, requestId);
 
-  let response: Response;
+  let eventStream: ReadableStream<Uint8Array>;
+
   try {
-    response = await fetch(PERPLEXITY_ENDPOINT, {
-      method: "POST",
-      headers: requestHeaders,
-      body: JSON.stringify(requestBody),
-      signal: signal ?? null,
-    });
+    const result = await exchange(
+      PERPLEXITY_ENDPOINT,
+      requestHeaders,
+      JSON.stringify(requestBody),
+      signal,
+    );
+    if (result.status !== 200) {
+      throw mapHttpError(result.status);
+    }
+    if (result.stream) {
+      eventStream = result.stream;
+    } else if (result.bodyText) {
+      eventStream = streamFromText(result.bodyText);
+    } else {
+      throw new SearchError("STREAM", "Perplexity returned an empty response.");
+    }
   } catch (error) {
+    if (error instanceof SearchError) throw error;
     if (signal?.aborted) {
       throw new SearchError("NETWORK", "Perplexity request was cancelled.");
     }
-
     throw new SearchError(
       "NETWORK",
       `Could not connect to Perplexity. ${errorMessage(error)}`,
     );
   }
-
-  if (!response.ok) {
-    throw mapHttpError(response.status);
-  }
-
-  if (!response.body) {
-    throw new SearchError("STREAM", "Perplexity returned an empty stream body.");
-  }
-
-  const eventStream = response.body;
 
   let snapshot: StreamEvent = {};
   let shouldCancelStream = true;
@@ -232,6 +405,7 @@ export async function searchPerplexity(
     try {
       for await (const event of readSseEvents(eventStream, signal)) {
         snapshot = mergeEvent(snapshot, event);
+        onProgress?.(event, snapshot);
         if (event.final || event.status === "COMPLETED") {
           stoppedAtTerminalEvent = true;
           break;
@@ -294,6 +468,10 @@ export async function searchPerplexity(
     ) ?? params.model;
   if (reportedModel !== undefined) result.displayModel = reportedModel;
   if (snapshot.uuid !== undefined) result.uuid = snapshot.uuid;
+  // Thread continuation state (all optional — stream shape is unstable).
+  if (snapshot.thread_url_slug) result.slug = snapshot.thread_url_slug;
+  if (snapshot.read_write_token) result.readWriteToken = snapshot.read_write_token;
+  if (snapshot.backend_uuid) result.backendUuid = snapshot.backend_uuid;
 
   return result;
 }

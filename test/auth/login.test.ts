@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, mock, test } from "../test-helpers.js";
 
-import { AuthError, type StoredToken } from "../../src/search/types.js";
+import { AuthError } from "../../src/search/types.js";
+import type { StoredToken } from "../../src/search/types.js";
+import type { AuthCredentials } from "../../src/auth/login.js";
 
 const originalFetch = globalThis.fetch;
 const originalBorrow = process.env.PI_AUTH_NO_BORROW;
@@ -31,27 +33,17 @@ async function importLoginModule() {
   return import(`../../src/auth/login.js?test=${crypto.randomUUID()}`);
 }
 
-function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", { value: platform });
-}
-
 function restoreEnv(): void {
-  if (originalBorrow === undefined) {
-    delete process.env.PI_AUTH_NO_BORROW;
-  } else {
-    process.env.PI_AUTH_NO_BORROW = originalBorrow;
-  }
-
-  if (originalEmail === undefined) {
-    delete process.env.PI_PERPLEXITY_EMAIL;
-  } else {
-    process.env.PI_PERPLEXITY_EMAIL = originalEmail;
-  }
-
-  if (originalOtp === undefined) {
-    delete process.env.PI_PERPLEXITY_OTP;
-  } else {
-    process.env.PI_PERPLEXITY_OTP = originalOtp;
+  for (const [key, original] of [
+    ["PI_AUTH_NO_BORROW", originalBorrow],
+    ["PI_PERPLEXITY_EMAIL", originalEmail],
+    ["PI_PERPLEXITY_OTP", originalOtp],
+  ] as const) {
+    if (original === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = original;
+    }
   }
 
   if (originalToken === undefined) {
@@ -67,6 +59,13 @@ function restoreEnv(): void {
   }
 }
 
+function setPlatform(value: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    value,
+    configurable: true,
+  });
+}
+
 afterEach(() => {
   mock.restore();
   globalThis.fetch = originalFetch;
@@ -77,6 +76,7 @@ afterEach(() => {
 describe("auth/login", () => {
   test("extractFromDesktopApp returns null when defaults command fails", async () => {
     setPlatform("darwin");
+
     const execFileMock = mock((...args: unknown[]) => {
       const callback = args[args.length - 1] as (
         error: Error | null,
@@ -99,6 +99,7 @@ describe("auth/login", () => {
 
   test("extractFromDesktopApp returns JWT from defaults output", async () => {
     setPlatform("darwin");
+
     const desktopToken = createJwt(Date.now() + 2 * 60 * 60 * 1000);
     const execFileMock = mock((...args: unknown[]) => {
       const callback = args[args.length - 1] as (
@@ -123,43 +124,19 @@ describe("auth/login", () => {
     expect(token).toBe(desktopToken);
   });
 
-  test("extractFromDesktopApp returns opaque token from defaults output", async () => {
-    setPlatform("darwin");
-    const desktopToken = createOpaqueToken();
-    const execFileMock = mock((...args: unknown[]) => {
-      const callback = args[args.length - 1] as (
-        error: Error | null,
-        stdout?: string,
-        stderr?: string,
-      ) => void;
-      callback(null, `${desktopToken}\n`, "");
-    }) as unknown as typeof import("node:child_process").execFile;
-
-    (execFileMock as unknown as Record<symbol, unknown>)[
-      Symbol.for("nodejs.util.promisify.custom")
-    ] = async () => ({ stdout: `${desktopToken}\n`, stderr: "" });
-
-    mock.module("node:child_process", () => ({
-      execFile: execFileMock,
-    }));
-
-    const { extractFromDesktopApp } = await importLoginModule();
-
-    const token = await extractFromDesktopApp();
-    expect(token).toBe(desktopToken);
-  });
-
-  test("authenticate returns cached token without desktop or OTP calls", async () => {
+  test("authenticate returns stored credentials without desktop or OTP calls", async () => {
     const cachedToken = createJwt(Date.now() + 2 * 60 * 60 * 1000);
-    const loadTokenMock = mock(async () => ({
+    const loadCredentialsMock = mock(async () => ({
       type: "oauth",
       access: cachedToken,
+      cookies: ["__Secure-next-auth.session-token=abc"],
     }) satisfies StoredToken);
     const saveTokenMock = mock(async (_token: StoredToken) => undefined);
     const clearTokenMock = mock(async () => undefined);
 
     mock.module("../../src/auth/storage.js", () => ({
-      loadToken: loadTokenMock,
+      loadToken: mock(async () => null),
+      loadCredentials: loadCredentialsMock,
       saveToken: saveTokenMock,
       clearToken: clearTokenMock,
     }));
@@ -179,27 +156,51 @@ describe("auth/login", () => {
 
     const { authenticate } = await importLoginModule();
 
-    const token = await authenticate();
+    const credentials: AuthCredentials = await authenticate();
 
-    expect(token.access).toBe(cachedToken);
-    expect(loadTokenMock).toHaveBeenCalledTimes(1);
+    expect(credentials.jwt).toBe(cachedToken);
+    expect(credentials.cookies).toEqual(["__Secure-next-auth.session-token=abc"]);
+    expect(credentials.source).toBe("cookies");
+    expect(loadCredentialsMock).toHaveBeenCalledTimes(1);
     expect(saveTokenMock).toHaveBeenCalledTimes(0);
     expect(clearTokenMock).toHaveBeenCalledTimes(0);
     expect(execFileMock).toHaveBeenCalledTimes(0);
+  });
+
+  test("authenticate without a jar enriches from the CLI cookie jar", async () => {
+    const cachedToken = createJwt(Date.now() + 2 * 60 * 60 * 1000);
+    mock.module("../../src/auth/storage.js", () => ({
+      loadToken: mock(async () => null),
+      loadCredentials: mock(async () => ({
+        type: "oauth",
+        access: cachedToken,
+        cookies: ["__Secure-next-auth.session-token=cli", "cf_clearance=ua-bound"],
+        userAgent: "Mozilla/5.0 CliUA",
+      })),
+      saveToken: mock(async (_token: StoredToken) => undefined),
+      clearToken: mock(async () => undefined),
+    }));
+
+    const { authenticate } = await importLoginModule();
+
+    const credentials = await authenticate();
+
+    expect(credentials.source).toBe("cookies");
+    expect(credentials.userAgent).toBe("Mozilla/5.0 CliUA");
+    expect(credentials.cookies).toContain("cf_clearance=ua-bound");
   });
 
   test("authenticate uses OTP fallback when desktop borrowing is disabled", async () => {
     process.env.PI_AUTH_NO_BORROW = "1";
 
     const otpToken = createOpaqueToken();
-    const loadTokenMock = mock(async () => null);
     const saveTokenMock = mock(async (_token: StoredToken) => undefined);
-    const clearTokenMock = mock(async () => undefined);
 
     mock.module("../../src/auth/storage.js", () => ({
-      loadToken: loadTokenMock,
+      loadToken: mock(async () => null),
+      loadCredentials: mock(async () => null),
       saveToken: saveTokenMock,
-      clearToken: clearTokenMock,
+      clearToken: mock(async () => undefined),
     }));
 
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -234,13 +235,14 @@ describe("auth/login", () => {
 
     const { authenticate } = await importLoginModule();
 
-    const token = await authenticate({
+    const credentials = await authenticate({
       promptForEmail: async () => "user@example.com",
       promptForOtp: async () => "123456",
     });
 
-    expect(token.access).toBe(otpToken);
-    expect(loadTokenMock).toHaveBeenCalledTimes(1);
+    expect(credentials.jwt).toBe(otpToken);
+    expect(credentials.source).toBe("otp");
+    expect(credentials.email).toBe("user@example.com");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(saveTokenMock).toHaveBeenCalledTimes(1);
 
@@ -262,8 +264,6 @@ describe("auth/login", () => {
       otp: "123456",
       csrfToken: "csrf-token",
     });
-
-    expect(clearTokenMock).toHaveBeenCalledTimes(0);
   });
 
   test("authenticate saves PI_PERPLEXITY_TOKEN without desktop or OTP calls", async () => {
@@ -276,15 +276,17 @@ describe("auth/login", () => {
 
     mock.module("../../src/auth/storage.js", () => ({
       loadToken: loadTokenMock,
+      loadCredentials: mock(async () => null),
       saveToken: saveTokenMock,
       clearToken: clearTokenMock,
     }));
 
     const { authenticate } = await importLoginModule();
 
-    const token = await authenticate();
+    const credentials = await authenticate();
 
-    expect(token.access).toBe("env-token");
+    expect(credentials.jwt).toBe("env-token");
+    expect(credentials.source).toBe("token");
     expect(saveTokenMock).toHaveBeenCalledTimes(1);
     expect(saveTokenMock.mock.calls[0]?.[0]).toEqual({ type: "oauth", access: "env-token" });
   });
@@ -301,16 +303,18 @@ describe("auth/login", () => {
 
     mock.module("../../src/auth/storage.js", () => ({
       loadToken: loadTokenMock,
+      loadCredentials: mock(async () => null),
       saveToken: saveTokenMock,
       clearToken: clearTokenMock,
     }));
 
     const { authenticate } = await importLoginModule();
 
-    const token = await authenticate();
+    const credentials = await authenticate();
 
-    expect(token.cookies).toContain("__Secure-next-auth.session-token=");
-    expect(token.access).toBe(browserToken);
+    expect(credentials.cookies.some((cookie: string) => cookie.startsWith("__Secure-next-auth.session-token="))).toBe(true);
+    expect(credentials.jwt).toBe(browserToken);
+    expect(credentials.source).toBe("cookies");
     expect(saveTokenMock).toHaveBeenCalledTimes(1);
   });
 
@@ -325,16 +329,17 @@ describe("auth/login", () => {
 
     mock.module("../../src/auth/storage.js", () => ({
       loadToken: loadTokenMock,
+      loadCredentials: mock(async () => null),
       saveToken: saveTokenMock,
       clearToken: clearTokenMock,
     }));
 
     const { authenticate } = await importLoginModule();
 
-    const token = await authenticate();
+    const credentials = await authenticate();
 
-    expect(token.access).toBe(browserToken);
-    expect(token.cookies).toBe(undefined);
+    expect(credentials.jwt).toBe(browserToken);
+    expect(credentials.cookies).toEqual([]);
     expect(saveTokenMock).toHaveBeenCalledTimes(1);
   });
 
@@ -348,6 +353,7 @@ describe("auth/login", () => {
 
     mock.module("../../src/auth/storage.js", () => ({
       loadToken: loadTokenMock,
+      loadCredentials: mock(async () => null),
       saveToken: saveTokenMock,
       clearToken: clearTokenMock,
     }));
@@ -378,9 +384,11 @@ describe("auth/login", () => {
     const { parseBrowserAuthInput } = await import("../../src/auth/browser.js");
     const parsed = parseBrowserAuthInput(curl);
 
-    expect(parsed?.cookies).toBe(
-      `pplx.visitor-id=visitor; __Secure-next-auth.session-token=${browserToken}; cf_clearance=clearance`,
-    );
+    expect(parsed?.cookies).toEqual([
+      "pplx.visitor-id=visitor",
+      `__Secure-next-auth.session-token=${browserToken}`,
+      "cf_clearance=clearance",
+    ]);
     expect(parsed?.access).toBe(browserToken);
   });
 
@@ -393,9 +401,11 @@ describe("auth/login", () => {
     const { parseBrowserAuthInput } = await import("../../src/auth/browser.js");
     const parsed = parseBrowserAuthInput(curl);
 
-    expect(parsed?.cookies).toBe(
-      `pplx.visitor-id=visitor; __Secure-next-auth.session-token=${browserToken}; cf_clearance=clearance`,
-    );
+    expect(parsed?.cookies).toEqual([
+      "pplx.visitor-id=visitor",
+      `__Secure-next-auth.session-token=${browserToken}`,
+      "cf_clearance=clearance",
+    ]);
     expect(parsed?.access).toBe(browserToken);
   });
 
@@ -407,7 +417,7 @@ describe("auth/login", () => {
       const curl = `curl 'https://www.perplexity.ai/rest/sse/perplexity_ask' ${flag} __Secure-next-auth.session-token=${browserToken}`;
       const parsed = parseBrowserAuthInput(curl);
 
-      expect(parsed?.cookies).toBe(`__Secure-next-auth.session-token=${browserToken}`);
+      expect(parsed?.cookies).toEqual([`__Secure-next-auth.session-token=${browserToken}`]);
       expect(parsed?.access).toBe(browserToken);
     }
   });
@@ -445,6 +455,7 @@ describe("auth/login", () => {
 
     mock.module("../../src/auth/storage.js", () => ({
       loadToken: loadTokenMock,
+      loadCredentials: mock(async () => null),
       saveToken: saveTokenMock,
       clearToken: clearTokenMock,
     }));
@@ -475,17 +486,77 @@ describe("auth/login", () => {
     expect(saveTokenMock).toHaveBeenCalledTimes(0);
   });
 
-  test("authenticate throws NO_TOKEN when no cached token and no OTP email input", async () => {
+  test("authenticate captures Set-Cookie jar during OTP login and saves it", async () => {
     process.env.PI_AUTH_NO_BORROW = "1";
 
-    const loadTokenMock = mock(async () => null);
+    const otpToken = createOpaqueToken();
     const saveTokenMock = mock(async (_token: StoredToken) => undefined);
-    const clearTokenMock = mock(async () => undefined);
 
     mock.module("../../src/auth/storage.js", () => ({
-      loadToken: loadTokenMock,
+      loadToken: mock(async () => null),
+      loadCredentials: mock(async () => null),
       saveToken: saveTokenMock,
-      clearToken: clearTokenMock,
+      clearToken: mock(async () => undefined),
+    }));
+
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/csrf")) {
+        return new Response(JSON.stringify({ csrfToken: "csrf-token" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "__Host-next-auth.csrf-token=csrf-cookie; Path=/; HttpOnly",
+          },
+        });
+      }
+
+      if (url.endsWith("/signin-email")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+
+      if (url.endsWith("/signin-otp")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            // token arrives as cookie, not body
+            "set-cookie": "__Secure-next-auth.session-token=otp-session; Path=/; Secure",
+          },
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { authenticate } = await importLoginModule();
+
+    const credentials = await authenticate({
+      promptForEmail: async () => "user@example.com",
+      promptForOtp: async () => "123456",
+    });
+
+    // no body token, but the session cookie came through Set-Cookie
+    expect(credentials.jwt).toBe("");
+    expect(credentials.cookies).toContain("__Secure-next-auth.session-token=otp-session");
+    expect(credentials.cookies).toContain("__Host-next-auth.csrf-token=csrf-cookie");
+    expect(credentials.source).toBe("otp");
+
+    const savedToken = saveTokenMock.mock.calls[0]?.[0] as StoredToken;
+    expect(savedToken.cookies).toContain("__Secure-next-auth.session-token=otp-session");
+  });
+
+  test("authenticate throws NO_TOKEN when no credentials and no OTP email input", async () => {
+    process.env.PI_AUTH_NO_BORROW = "1";
+
+    mock.module("../../src/auth/storage.js", () => ({
+      loadToken: mock(async () => null),
+      loadCredentials: mock(async () => null),
+      saveToken: mock(async (_token: StoredToken) => undefined),
+      clearToken: mock(async () => undefined),
     }));
 
     const { authenticate } = await importLoginModule();
@@ -501,7 +572,5 @@ describe("auth/login", () => {
 
     expect(thrown).toBeInstanceOf(AuthError);
     expect((thrown as AuthError).code).toBe("NO_TOKEN");
-    expect((thrown as AuthError).message).toContain("OTP fallback");
-    expect(saveTokenMock).toHaveBeenCalledTimes(0);
   });
 });

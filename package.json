@@ -1,6 +1,6 @@
 {
   "name": "pi-perplexity",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Perplexity web search for pi — uses your Pro/Max subscription, no API credits needed",
   "keywords": [
     "pi-package",
@@ -36,6 +36,7 @@
     "typescript": "*"
   },
   "scripts": {
+    "auth:local": "bun run scripts/login.ts",
     "typecheck": "tsc --noEmit",
     "test:build": "node -e \"require('node:fs').rmSync('.tmp-test',{recursive:true,force:true})\" && tsc --project tsconfig.test.json",
     "test": "npm run test:build && node --test --experimental-test-module-mocks \".tmp-test/test/**/*.test.js\""

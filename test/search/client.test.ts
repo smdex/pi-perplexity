@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "../test-helpers.js";
 
 import { SearchError } from "../../src/search/types.js";
+import type { AuthCredentials } from "../../src/auth/login.js";
 
 let searchPerplexity: typeof import("../../src/search/client.js").searchPerplexity;
+
+function credentials(overrides: Partial<AuthCredentials> = {}): AuthCredentials {
+  return {
+    jwt: "jwt-token",
+    cookies: ["__Secure-next-auth.session-token=abc", "cf_clearance=xyz"],
+    userAgent: "Mozilla/5.0 TestUA",
+    email: "user@example.com",
+    source: "cookies",
+    ...overrides,
+  };
+}
 
 function createSseResponse(events: Array<Record<string, unknown>>, status = 200): Response {
   const streamText = [
@@ -58,7 +70,7 @@ describe("searchPerplexity", () => {
     const controller = new AbortController();
     const result = await searchPerplexity(
       { query: "latest Node release notes", recency: "week", model: "pplx_pro_upgraded" },
-      "jwt-token",
+      credentials(),
       controller.signal,
     );
 
@@ -68,6 +80,10 @@ describe("searchPerplexity", () => {
 
     const headers = new Headers(capturedInit?.headers);
     expect(headers.get("Authorization")).toBe("Bearer jwt-token");
+    expect(headers.get("Cookie")).toBe(
+      "__Secure-next-auth.session-token=abc; cf_clearance=xyz",
+    );
+    expect(headers.get("User-Agent")).toBe("Mozilla/5.0 TestUA");
     expect(headers.get("Accept")).toBe("text/event-stream");
     expect(headers.get("X-App-ApiVersion")).toBe("2.18");
     expect(headers.get("X-Request-ID")).toBeTruthy();
@@ -81,7 +97,7 @@ describe("searchPerplexity", () => {
         is_incognito: boolean;
         search_recency_filter: string | null;
         frontend_uuid: string;
-        frontend_context_uuid: string;
+        frontend_context_uuid?: string;
       };
     };
 
@@ -92,10 +108,77 @@ describe("searchPerplexity", () => {
     expect(body.params.is_incognito).toBe(true);
     expect(body.params.search_recency_filter).toBe("week");
     expect(body.params.frontend_uuid).toBeTruthy();
-    expect(body.params.frontend_context_uuid).toBeTruthy();
+    expect(body.params.frontend_context_uuid).toBe(undefined);
 
     expect(result.answer).toBe("answer text");
     expect(result.sources).toHaveLength(1);
+  });
+
+  test("followup request carries continuation fields and drops query_source duplication", async () => {
+    let capturedInit: RequestInit | undefined;
+
+    globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return createSseResponse([
+        {
+          status: "COMPLETED",
+          final: true,
+          text: "followup answer",
+          thread_url_slug: "f0000000-0000-4000-8000-000000000001",
+          read_write_token: "rw-token-2",
+          backend_uuid: "backend-2",
+        },
+      ]);
+    }) as unknown as typeof fetch;
+
+    const result = await searchPerplexity(
+      {
+        query: "and its release date?",
+        model: "pplx_pro_upgraded",
+        followup: { lastBackendUuid: "backend-1", readWriteToken: "rw-token-1" },
+      },
+      credentials(),
+    );
+
+    const body = JSON.parse(String(capturedInit?.body)) as {
+      params: {
+        last_backend_uuid?: string;
+        read_write_token?: string;
+        query_source?: string;
+        followup_source?: string;
+      };
+    };
+    expect(body.params.last_backend_uuid).toBe("backend-1");
+    expect(body.params.read_write_token).toBe("rw-token-1");
+    expect(body.params.query_source).toBe("followup");
+    expect(body.params.followup_source).toBe("link");
+
+    expect(result.slug).toBe("f0000000-0000-4000-8000-000000000001");
+    expect(result.readWriteToken).toBe("rw-token-2");
+    expect(result.backendUuid).toBe("backend-2");
+  });
+
+  test("extracts thread fields from the stream into the result", async () => {
+    globalThis.fetch = (async () =>
+      createSseResponse([
+        {
+          status: "COMPLETED",
+          final: true,
+          text: "answer",
+          thread_url_slug: "a0000000-0000-4000-8000-000000000009",
+          read_write_token: "rw-9",
+          backend_uuid: "be-9",
+          blocks: [],
+        },
+      ])) as unknown as typeof fetch;
+
+    const result = await searchPerplexity(
+      { query: "q", model: "pplx_pro_upgraded" },
+      credentials(),
+    );
+    expect(result.slug).toBe("a0000000-0000-4000-8000-000000000009");
+    expect(result.readWriteToken).toBe("rw-9");
+    expect(result.backendUuid).toBe("be-9");
   });
 
   test("passes model through to request body", async () => {
@@ -110,7 +193,7 @@ describe("searchPerplexity", () => {
 
     await searchPerplexity(
       { query: "q", model: "claude46sonnetthinking" },
-      "jwt-token",
+      credentials(),
     );
 
     const body = JSON.parse(String(capturedInit?.body)) as {
@@ -131,7 +214,13 @@ describe("searchPerplexity", () => {
 
     await searchPerplexity(
       { query: "q", model: "pplx_pro_upgraded" },
-      { type: "oauth", cookies: "__Secure-next-auth.session-token=session; cf_clearance=clearance" },
+      {
+        jwt: "",
+        cookies: ["__Secure-next-auth.session-token=session", "cf_clearance=clearance"],
+        userAgent: null,
+        email: null,
+        source: "cookies",
+      },
     );
 
     const headers = new Headers(capturedInit?.headers);
@@ -149,7 +238,7 @@ describe("searchPerplexity", () => {
       ]);
     }) as unknown as typeof fetch;
 
-    await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt-token");
+    await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, credentials({ jwt: "jwt-token" }));
 
     const body = JSON.parse(String(capturedInit?.body)) as {
       params: { is_incognito: boolean };
@@ -174,7 +263,7 @@ describe("searchPerplexity", () => {
         headers: { "content-type": "text/event-stream" },
       })) as unknown as typeof fetch;
 
-    const result = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt");
+    const result = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, credentials());
 
     expect(result.answer).toBe("answer");
     expect(cancelCalled).toBe(true);
@@ -184,7 +273,9 @@ describe("searchPerplexity", () => {
     for (const status of [401, 403]) {
       globalThis.fetch = (async () => new Response("auth fail", { status })) as unknown as typeof fetch;
 
-      await expect(searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt")).rejects.toMatchObject({
+      await expect(
+        searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, credentials({ jwt: "" })),
+      ).rejects.toMatchObject({
         name: "SearchError",
         code: "AUTH",
       });
@@ -194,7 +285,9 @@ describe("searchPerplexity", () => {
   test("maps 429 responses to RATE_LIMIT error", async () => {
     globalThis.fetch = (async () => new Response("rate limited", { status: 429 })) as unknown as typeof fetch;
 
-    await expect(searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt")).rejects.toMatchObject({
+    await expect(
+      searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, credentials()),
+    ).rejects.toMatchObject({
       name: "SearchError",
       code: "RATE_LIMIT",
     });
@@ -222,7 +315,10 @@ describe("searchPerplexity", () => {
         },
       ])) as unknown as typeof fetch;
 
-    const result = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt");
+    const result = await searchPerplexity(
+      { query: "q", model: "pplx_pro_upgraded" },
+      credentials(),
+    );
 
     expect(result.sources).toHaveLength(2);
     expect(result.sources[0].url).toBe("https://example.com/path");
@@ -244,7 +340,10 @@ describe("searchPerplexity", () => {
         },
       ])) as unknown as typeof fetch;
 
-    const result = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt");
+    const result = await searchPerplexity(
+      { query: "q", model: "pplx_pro_upgraded" },
+      credentials(),
+    );
     expect(result.answer).toBe("markdown answer");
   });
 
@@ -262,7 +361,10 @@ describe("searchPerplexity", () => {
         },
       ])) as unknown as typeof fetch;
 
-    const askTextResult = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt");
+    const askTextResult = await searchPerplexity(
+      { query: "q", model: "pplx_pro_upgraded" },
+      credentials(),
+    );
     expect(askTextResult.answer).toBe("ask answer");
 
     globalThis.fetch = (async () =>
@@ -275,7 +377,10 @@ describe("searchPerplexity", () => {
         },
       ])) as unknown as typeof fetch;
 
-    const textResult = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt");
+    const textResult = await searchPerplexity(
+      { query: "q", model: "pplx_pro_upgraded" },
+      credentials(),
+    );
     expect(textResult.answer).toBe("text fallback");
   });
 
@@ -292,7 +397,7 @@ describe("searchPerplexity", () => {
         },
       ])) as unknown as typeof fetch;
 
-    const preferred = await searchPerplexity({ query: "q", model: "claude50sonnetthinking" }, "jwt");
+    const preferred = await searchPerplexity({ query: "q", model: "claude50sonnetthinking" }, credentials());
     expect(preferred.displayModel).toBe("claude50sonnetthinking");
 
     globalThis.fetch = (async () =>
@@ -307,7 +412,7 @@ describe("searchPerplexity", () => {
         },
       ])) as unknown as typeof fetch;
 
-    const fallback = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt");
+    const fallback = await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, credentials());
     expect(fallback.displayModel).toBe("pplx_pro_upgraded");
 
     globalThis.fetch = (async () =>
@@ -322,7 +427,7 @@ describe("searchPerplexity", () => {
         },
       ])) as unknown as typeof fetch;
 
-    const requested = await searchPerplexity({ query: "q", model: "glm_5_2" }, "jwt");
+    const requested = await searchPerplexity({ query: "q", model: "glm_5_2" }, credentials());
     expect(requested.displayModel).toBe("glm_5_2");
   });
 
@@ -332,7 +437,7 @@ describe("searchPerplexity", () => {
 
     let thrown: unknown;
     try {
-      await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, "jwt");
+      await searchPerplexity({ query: "q", model: "pplx_pro_upgraded" }, credentials());
     } catch (error) {
       thrown = error;
     }

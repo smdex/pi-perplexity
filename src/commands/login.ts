@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { browserLoginInstructions } from "../auth/browser.js";
 import { authenticate, saveBrowserAuthInput } from "../auth/login.js";
 import { clearToken } from "../auth/storage.js";
+import { formatRemaining, isTempExpired, isTempLive, listThreadStates, tempRemaining } from "../auth/threads.js";
 import { AuthError } from "../search/types.js";
 import { errorMessage } from "../util.js";
 
@@ -129,6 +130,68 @@ export function registerPerplexityCommands(pi: ExtensionAPI): void {
         }
 
         ctx.ui.notify(`Perplexity login failed: ${errorMessage(error)}`, "error");
+      }
+    },
+  });
+}
+
+/** Human-readable age relative to now ("just now", "5m ago", "3h ago", "2d ago"). */
+function formatAge(iso: string | undefined): string {
+  const ts = Date.parse(iso ?? "");
+  if (Number.isNaN(ts)) return "unknown age";
+  const seconds = Math.floor((Date.now() - ts) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+export function registerPerplexityThreadsCommand(pi: ExtensionAPI): void {
+  pi.registerCommand("perplexity-threads", {
+    description: "List locally known Perplexity sessions available for continuation",
+    handler: async (args, ctx) => {
+      if (args.trim() === "--help" || args.trim() === "-h") {
+        ctx.ui.notify(
+          'Usage: /perplexity-threads [--all]\n\nShows stored session state for perplexity_search continuation:\n  thread="<slug>"  — continue a specific session\n  continue=true    — continue the most recent live (incognito) session\n\nDefault hides expired incognito sessions; --all includes them.',
+          "info",
+        );
+        return;
+      }
+
+      try {
+        void await import("../auth/threads.js").then((m) => m.cleanupTempThreads());
+        const showAll = args.trim() === "--all";
+        const states = await listThreadStates();
+
+        if (states.length === 0) {
+          ctx.ui.notify(
+            'No stored Perplexity sessions yet. Run a perplexity_search query first — its Meta section will include a "Session ID".',
+            "info",
+          );
+          return;
+        }
+
+        const lines: string[] = [];
+        for (const state of states) {
+          if (!showAll && state.incognito === true && isTempExpired(state)) continue;
+          const ttl = formatRemaining(tempRemaining(state));
+          const ttlPart = ttl ? ` (${ttl})` : "";
+          const live = state.incognito === true ? (isTempLive(state) ? "temp·live" : "temp·expired") : "kept";
+          const query = (state.query ?? "(no query recorded)").replace(/\s+/g, " ").slice(0, 60);
+          lines.push(
+            `${state.slug}  [${live}${ttlPart}] ${formatAge(state.updatedAt)} · ${state.model ?? "?"} · "${query}"`,
+          );
+          lines.push(`    ${state.url}`);
+        }
+
+        ctx.ui.notify(
+          `Perplexity sessions (${lines.filter((l) => !l.startsWith(" ")).length}):\n${lines.join("\n")}`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(`Failed to list sessions: ${errorMessage(error)}`, "error");
       }
     },
   });

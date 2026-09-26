@@ -51,7 +51,7 @@ describe("Perplexity model selection e2e", () => {
             query: "Say exactly OK",
             model,
           },
-          token,
+          { jwt: token.access ?? "", cookies: token.cookies ?? [], userAgent: token.userAgent ?? null, email: token.email ?? null, source: "token" },
         );
 
         expect(result.answer.trim().startsWith("OK")).toBe(true);

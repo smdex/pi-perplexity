@@ -5,7 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.5.0] - 2026-09-26
+
+### Added
+
+- **Session continuation (extension)** — `perplexity_search` accepts a `thread` param (a session id from a previous result's Meta section, or a `perplexity.ai/search/<id>` URL) or `continue: true` to keep the same Perplexity conversation across calls. Session state (slug, read-write token, last backend uuid) is persisted locally with a TTL matching the server-side lifetime of incognito chats.
+- **Cookie-jar credentials (extension)** — the extension now works from session cookies, not just the Bearer token: OTP login captures the full `Set-Cookie` jar, and `~/.config/pplx-cli/auth.json` written by `pplx login` is used as a read-only fallback when the extension has no stored token.
+- **Live model catalog in `/perplexity-config`** — the model picker now lists models fetched from `GET /rest/models/config?config_schema=v1` instead of a hardcoded list, with a fallback to the bundled slugs when offline.
+- **`scripts/login.ts`** — interactive email-OTP login helper for the extension.
+- **`pplx` CLI: temporary chats by default** — new chats run incognito with a local session registry, TTL expiry guards and an auto-sweep; `pplx ask --continue` resumes the most recent registry session. Covered by opt-in e2e tests.
+- **`pplx ask --save <file>`** — dump the reply to a file.
+- **`pplx ask --image` / `--save-images`** — image-mode asks extract generated images; `--save-images` downloads them (fetching only the parsed, allowlisted URL object).
+- **`pplx models --picker`** — list only the models the webapp UI offers (the `config` slots), plus `--all` and `--mode <m>` filters and `--json` output; live catalog via `GET /rest/models/config?config_schema=v1` (supersedes the earlier "no endpoint" contract §H) with a 24h disk cache and bundled-slug fallback offline. `--model` shell completion offers the live slugs too. The endpoint carries no availability/deprecation field — retired models vanish from the list server-side.
+- **`pplx login` overhaul** — browser-like User-Agent replay and one-by-one credential paste.
+- **Nix packaging** — `package.nix` builds the `pplx` CLI and installs the agent skill under `share/pplx/skills`; the CLI version is derived from `cli/package.json`.
+
+### Fixed
+
+- **`pplx ask` tty garbling** — `onEvent` stopped the spinner on every SSE event and `spinner.stop()` unconditionally emitted its clear sequence (`\r` + spaces + `\r`), erasing the first ~20 columns of the already-streamed answer on a shared terminal; the next suffix write then overwrote from column 0, producing the observed repeated clears, inline reprints, and a visually truncated answer. `stop()` is now idempotent (writes the clear only when a spinner is actually visible) and `onEvent` stops the spinner once.
+
+### Changed
+
+- Docs corrected: `research/api-contract.md` §H, `research/network/API-INDEX.md`, `cli/README.md`, `cli/skills/perplexity-cli/SKILL.md`.
+- Repository hygiene for public releases: captured identifiers, tokens, signatures and URLs in test fixtures were replaced with synthetic values (fixture structure and coverage unchanged); generated agent artifacts and machine-local tool config are no longer tracked, and `cli/package.json` now ships an explicit `files` allowlist.
+
 
 ## [0.4.0] - 2026-07-16
 

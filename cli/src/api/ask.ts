@@ -11,6 +11,7 @@ import { AskMerger, isTerminalEvent, parseAskEvent, readSseJson, type AskEvent, 
 export interface AskOptions {
   query: string;
   model?: string; // default DEFAULT_MODEL
+  recency?: "hour" | "day" | "week" | "month" | "year";
   sources?: string[]; // default ["web"]
   attachments?: string[]; // s3_object_urls from uploads.ts
   incognito?: boolean; // default true
@@ -84,6 +85,7 @@ export function buildAskBody(opts: AskOptions): AskBody {
     use_schematized_api: true,
     version: "2.18",
   };
+  if (opts.recency) params.search_recency_filter = opts.recency;
   if (opts.space) {
     params.target_collection_uuid = opts.space;
     params.target_thread_access_level = 5;

@@ -21,26 +21,23 @@ pi install github:ivanrvpereira/pi-perplexity
 
 ## Hermes plugin
 
-This repository also includes an opt-in [Hermes Agent](https://github.com/NousResearch/hermes-agent) adapter. It exposes the existing subscription-backed pi-perplexity implementation as two Hermes tools: `perplexity_ask` for a normal search and `perplexity_deep` for long-running research (default model: `pplx_alpha`). The adapter is dependency-free and invokes the repository's TypeScript CLI rather than porting the search protocol to Python.
-
-Install it from a pi-perplexity checkout:
+This repository includes a Hermes plugin exposing `perplexity_ask` and `perplexity_research`. Unlike a skill (which only instructs the agent to run shell commands), the plugin provides typed, discoverable tools. It delegates to the richer standalone **Bun `pplx` CLI** under `cli/`, so it shares that CLI's cookie login, connectors, uploads, thread handling, and model catalog. It does **not** use the Pi extension's separate auth store.
 
 ```bash
+cd cli && bun install && bun src/index.ts login --status
+cd ..
 mkdir -p ~/.hermes/plugins
 ln -s "$PWD/hermes-plugin" ~/.hermes/plugins/pi-perplexity
-# Or copy it instead:
-# cp -R "$PWD/hermes-plugin" ~/.hermes/plugins/pi-perplexity
-export PI_PERPLEXITY_HOME="$PWD"
 hermes plugins enable pi-perplexity
 ```
 
-Set `PI_PERPLEXITY_HOME` to the checkout containing `src/cli.ts` and `node_modules`; it is required when the plugin is copied and recommended for a symlink as well. The plugin is opt-in and takes effect in a new Hermes session. Its runtime knobs are:
+Sign in with `bun cli/src/index.ts login` if needed, then start a new Hermes session. Set `PI_PERPLEXITY_HOME` to the checkout if copying the plugin elsewhere; `PI_PERPLEXITY_BUN` can override the Bun executable. The plugin caches live search-model and connected-connector IDs at startup (with an offline fallback); restart Hermes to refresh them. `PI_PERPLEXITY_ASK_TIMEOUT_MS` and `PI_PERPLEXITY_RESEARCH_TIMEOUT_MS` control subprocess limits (90 seconds and 10 minutes by default).
 
-| Variable | Description |
-|---|---|
-| `PI_PERPLEXITY_NODE` | Node executable to run (defaults to `node`) |
-| `PI_PERPLEXITY_ASK_TIMEOUT_MS` | Normal-search subprocess timeout (defaults to 90,000 ms) |
-| `PI_PERPLEXITY_DEEP_TIMEOUT_MS` | Deep-research subprocess timeout (defaults to 600,000 ms) |
+Inputs: `query`, `sources` (web, scholar, social, finance, or connected GitHub), `recency`, `limit`, `files` (local uploads), `thread` or `continue`, `space`, `persistent` (default false/incognito), `save`, and `save_images`. Output is TOON with `message`, `references`, `metadata`, and `file_references` (verified saved paths where available); error responses contain `error` instead. Image URLs may expire.
+
+The agent cannot choose a model. Use `/perplexity-config list` to see recommended search models (GPT-6 Sol, Gemini 3.8 Flash, Kimi K3, Claude Sonnet 5, Grok 4.7, Claude Opus 5.5), `/perplexity-config all` for the full live catalog, `/perplexity-config <model-id>` to set one, or `/perplexity-config reset` to restore the CLI default. The command shares the Pi extension's `~/.config/pi-perplexity/config.json`; research always uses `pplx_alpha`.
+
+For occasional interactive CLI use, the existing `cli/skills/perplexity-cli` skill is sufficient. Choose the plugin when you want these named tools available to Hermes automatically.
 
 ## Authentication
 

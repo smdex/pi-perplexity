@@ -22,6 +22,7 @@ import { copyToClipboard, out, run, threadSlugFromRef, warn } from "./util.js";
 interface AskArgs {
   query: string[];
   model?: string;
+  recency?: AskOptions["recency"];
   sources?: string[];
   attach?: string[];
   thread?: string;
@@ -148,6 +149,7 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
       {
         query,
         ...(argv.model ? { model: argv.model } : {}),
+        ...(argv.recency ? { recency: argv.recency } : {}),
         ...(argv.sources && argv.sources.length > 0 ? { sources: argv.sources } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         incognito: argv.incognito ?? true,
@@ -269,6 +271,7 @@ function askOptions(y: Argv): Argv {
   return y
     .positional("query", { type: "string", describe: "the question" })
     .option("model", { type: "string", describe: "model slug (see `pplx models`)" })
+    .option("recency", { type: "string", choices: ["hour", "day", "week", "month", "year"], describe: "filter results by age" })
     .option("sources", { type: "array", string: true, describe: "source/connector ids, e.g. web scholar" })
     .option("attach", { type: "array", string: true, describe: "files to upload and attach" })
     .option("thread", { type: "string", describe: "thread slug or URL to continue" })

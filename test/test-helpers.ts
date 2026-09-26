@@ -66,9 +66,9 @@ export const mock: MockApi = Object.assign(
     module(specifier: string, factory: () => Record<string, unknown>) {
       const moduleMock = nodeMock.module as unknown as (
         specifier: string,
-        options: { exports: Record<string, unknown> },
+        options: { namedExports: Record<string, unknown> },
       ) => unknown;
-      return moduleMock.call(nodeMock, resolveMockSpecifier(specifier), { exports: factory() });
+      return moduleMock.call(nodeMock, resolveMockSpecifier(specifier), { namedExports: factory() });
     },
     restore() {
       nodeMock.restoreAll();

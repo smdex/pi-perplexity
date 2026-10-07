@@ -42,7 +42,7 @@ let
 
   bunDeps = fetchBunDeps {
     inherit src;
-    hash = "sha256-EDE3+L+19eoDnSADIZbf2LfmavzJGolyKM99D35X17c=";
+    hash = "sha256-A0MWvmLAsI0yMr6rvYRYbDuS0sZAP53lrN3WhmtHQ2c=";
   };
 in
 stdenvNoCC.mkDerivation (finalAttrs: {

@@ -12,7 +12,7 @@ description: |
   thread", "list my Perplexity spaces". Do NOT trigger for generic web
   search, fetching a known URL, or local file operations — this skill is
   specifically about the Perplexity service through the pplx CLI.
-compatibility: Requires the pplx CLI (NixOS: `nix profile install -f .` from the pi-perplexity repo; elsewhere: repo `pi-perplexity/cli`, run via `bun run src/index.ts` or installed as `pplx`), plus a one-time `pplx login` or a `PPLX_COOKIE` env var.
+compatibility: "Requires the pplx CLI (NixOS: `nix profile install -f .` from the pi-perplexity repo; elsewhere: repo `pi-perplexity/cli`, run via `bun run src/index.ts` or installed as `pplx`), plus a one-time `pplx login` or a `PPLX_COOKIE` env var."
 ---
 
 # Perplexity CLI (`pplx`)

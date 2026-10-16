@@ -1,5 +1,5 @@
-# Local issue tracking only; GitHub mirroring is an explicit separate action.
-# Workflow and authentication: docs/agents/issue-tracker.md.
+# Local issue tracking only; no GitHub mirroring or Dolt federation.
+# Workflow: docs/agents/issue-tracker.md.
 dolt:
   local-only: true
 backup:

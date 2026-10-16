@@ -4,9 +4,9 @@
 
 ### Issue tracker
 
-Before creating, claiming, closing, or syncing tickets, read
-`docs/agents/issue-tracker.md`: local Beads is authoritative; GitHub is a
-manual push-only mirror.
+Before creating, claiming, or closing tickets, read
+`docs/agents/issue-tracker.md`: local Beads is the sole tracker; issues
+stay local with no remote synchronization.
 
 ### Triage labels
 

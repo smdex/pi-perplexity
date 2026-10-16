@@ -1,7 +1,7 @@
 # Triage labels
 
-Apply these exact labels to local Beads tickets. Their GitHub mirror uses
-the same names; `docs/agents/issue-tracker.md` defines synchronization.
+Apply these exact labels to local Beads tickets. Tracker operations are
+defined in `docs/agents/issue-tracker.md`; no remote label setup is needed.
 
 | Role | Label | Meaning |
 | --- | --- | --- |

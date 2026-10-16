@@ -1,0 +1,46 @@
+feature_name: "CLI-first Perplexity"
+specification: "docs/pplx-cli-spec.md"
+status: "Scope confirmed; implementation not started"
+problem_statement: >-
+  The repository centers the Pi extension while the standalone pplx CLI
+  lives in a subdirectory. Integrations duplicate Perplexity behavior.
+  Terminal streaming
+  stalls after a short prefix, and CLI users cannot persist model, connector, or
+  space defaults. Make pplx the shared executable and add reproducible
+  flake packaging.
+constraints:
+  - "Breaking changes are allowed; no legacy installation/path shims."
+  - "Pi and Hermes invoke pplx and inherit its authentication and settings."
+  - >-
+    Preserve CLI capabilities and privacy except for specified changes.
+  - "Do not delete or automatically migrate existing auth/config files."
+  - "Verify streaming semantics; the reported cause is not yet reproduced."
+  - "Use flake-parts and nixpkgs nixos-unstable with a committed flake.lock."
+  - >-
+    Target x86_64-linux, aarch64-linux, x86_64-darwin, and aarch64-darwin;
+    report native verification separately.
+out_of_scope:
+  - "Implementation during this specification task"
+  - "Legacy installation compatibility shims"
+  - "Automatic authentication or settings migration"
+  - "New MCP integrations, unrelated cleanup, publication, or deployment"
+  - "Incremental answer transport in Pi/Hermes"
+  - "New NixOS/Home Manager modules, overlays, or development-shell overhaul"
+key_decisions:
+  - decision: >-
+      Move the CLI package, sources, tests, lockfile, and skill to the root.
+    rationale: "User requested the CLI as the primary repository package."
+  - decision: "Make Pi and Hermes thin adapters over installed pplx."
+    rationale: "User explicitly chose reuse of pplx over separate clients."
+  - decision: "Persist model, sources/connectors, and space defaults."
+    rationale: "User requested shared defaults inherited by adapters."
+  - decision: "Redraw terminal revisions; redirect only the final answer."
+    rationale: "Pipes cannot retract bytes; terminal streaming must not stall."
+  - decision: >-
+      Export pplx and default packages from a locked flake-parts flake
+      using nixos-unstable.
+    rationale: "User explicitly added the flake packaging requirement."
+  - decision: "Target x86_64 and aarch64 on both Linux and Darwin."
+    rationale: >-
+      Interpret the user confirmation of Linux/Darwin targets broadly;
+      native support still requires validation.

@@ -4,9 +4,9 @@ import { dirname, join } from "node:path";
 import { ORIGIN } from "../constants.js";
 import { streamAsk, type AskOptions } from "../api/ask.js";
 import { uploadFile } from "../api/uploads.js";
-import { resolveSpace } from "../api/spaces.js";
+import { resolveAskDefaults } from "../ask_defaults.js";
 import { libraryThreads, sidebarThreads } from "../api/graphql.js";
-import { isTempExpired, isTempLive, listThreadStates, loadThreadState, saveThreadState, tempRemaining, type ThreadState } from "../config.js";
+import { isTempExpired, isTempLive, listThreadStates, loadSettings, loadThreadState, saveThreadState, tempRemaining, type ThreadState } from "../config.js";
 import { renderAnswer } from "../render/markdown.js";
 import { AnswerStreamPrinter } from "../render/answer-stream.js";
 import { StderrSpinner } from "../render/spinner.js";
@@ -27,7 +27,7 @@ interface AskArgs {
   attach?: string[];
   thread?: string;
   incognito?: boolean;
-  space?: string;
+  space?: string | false;
   json?: boolean;
   copy?: boolean;
   stream?: boolean;
@@ -110,14 +110,20 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
       if (!json) process.stderr.write(`continuing temp chat ${live.slug} (${tempRemaining(live)} left)\n`);
     }
 
-    // --space targeting (verified: s-summary “Ask inside space” —
-    // params.target_collection_uuid + target_thread_access_level:5 + query_source "collection")
-    let space: string | undefined;
-    if (argv.space) {
-      const resolved = await resolveSpace(argv.space);
-      if (!resolved) throw new Error(`space not found: ${argv.space} (see \`pplx spaces list\`)`);
-      space = resolved.uuid;
+    const defaults = await resolveAskDefaults({
+      mode,
+      ...(argv.model ? { model: argv.model } : {}),
+      ...(argv.sources ? { sources: argv.sources } : {}),
+      ...(typeof argv.space === "string" ? { space: argv.space } : {}),
+      ...(argv.space === false ? { noSpace: true } : {}),
+      ...(argv.incognito !== undefined ? { incognito: argv.incognito } : {}),
+      ...(argv.thread ? { thread: argv.thread } : {}),
+      ...(argv.continue ? { continueThread: true } : {}),
+    }, await loadSettings());
+    if (defaults.ignoredConfiguredSpace) {
+      warn("configured space applies only to new threads; continuing the existing thread without retargeting it");
     }
+    const { space } = defaults;
 
     // --attach uploads: presign → S3 POST → subscribe SSE
     let attachments: string[] | undefined;
@@ -139,11 +145,11 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
     const result = await streamAsk(
       {
         query,
-        ...(argv.model ? { model: argv.model } : {}),
+        ...(defaults.model ? { model: defaults.model } : {}),
         ...(argv.recency ? { recency: argv.recency } : {}),
-        ...(argv.sources && argv.sources.length > 0 ? { sources: argv.sources } : {}),
+        ...(defaults.sources ? { sources: defaults.sources } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
-        incognito: argv.incognito ?? true,
+        incognito: defaults.incognito,
         ...(followup ? { followup } : {}),
         ...(space ? { space } : {}),
         ...(mode === "research" ? { research: true } : {}),
@@ -204,7 +210,7 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
 
     // persist thread state for --thread follow-ups + `chats show`
     const finalSlug = slug ?? (result.threadUrl ? threadSlugFromRef(result.threadUrl) : null);
-    const incognito = argv.incognito ?? true;
+    const incognito = defaults.incognito;
     if (finalSlug && result.readWriteToken && result.backendUuid) {
       await saveThreadState({
         slug: finalSlug,
@@ -255,9 +261,9 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
 function askOptions(y: Argv): Argv {
   return y
     .positional("query", { type: "string", describe: "the question" })
-    .option("model", { type: "string", describe: "model slug (see `pplx models`)" })
+    .option("model", { type: "string", describe: "model slug (overrides saved model; see `pplx models`)" })
     .option("recency", { type: "string", choices: ["hour", "day", "week", "month", "year"], describe: "filter results by age" })
-    .option("sources", { type: "array", string: true, describe: "source/connector ids, e.g. web scholar" })
+    .option("sources", { type: "array", string: true, describe: "replace saved sources; use --sources web to bypass configured connectors" })
     .option("attach", { type: "array", string: true, describe: "files to upload and attach" })
     .option("thread", { type: "string", describe: "thread slug or URL to continue" })
     .option("continue", { type: "boolean", describe: "continue the most recent live temp chat" })
@@ -266,7 +272,7 @@ function askOptions(y: Argv): Argv {
       default: true,
       describe: "temp chat: excluded from history, auto-deleted ~24h (use --no-incognito to keep)",
     })
-    .option("space", { type: "string", describe: "target a space (title or uuid; the thread is created inside it)" })
+    .option("space", { type: "string", describe: "space title/uuid (requires --no-incognito); --no-space bypasses saved space" })
     .option("json", { type: "boolean", describe: "print a single JSON result" })
     .option("copy", { type: "boolean", describe: "copy the final answer to the clipboard" })
     .option("save-images", {

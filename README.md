@@ -92,6 +92,40 @@ pplx login --logout               # remove stored credentials
 Cookies are stored at `~/.config/pplx-cli/auth.json` with `0600`
 permissions and rotated automatically from `Set-Cookie` responses.
 
+## Shared defaults
+
+`pplx` stores settings separately from auth in `~/.config/pplx-cli/config.json`
+(or `$PPLX_CONFIG_DIR/config.json`). Writes are atomic and use `0600` permissions.
+
+```bash
+pplx config set model glm_5_3_thinking
+pplx config set sources web scholar
+pplx config set space "Ops: linux"
+pplx config get                 # also: get model; --json for machine-readable values
+pplx config unset space
+pplx ask "question" --sources web --no-space  # bypass saved connectors and space once
+```
+
+Explicit flags replace saved values, which replace built-in defaults. Source
+lists replace, never append. Research always uses its own `pplx_alpha` engine,
+regardless of the saved or explicit model. Model identifiers pass through as
+with `--model`; settings commands do not fetch catalogs. Configured custom
+connectors are checked against connected sources before an ask; unavailable
+connectors/spaces or invalid settings stop the request rather than changing scope.
+
+Space references use existing UUID, case-insensitive title, or unique-prefix
+resolution. A saved space applies to new threads; `--thread`/`--continue` keep
+the existing thread and warn rather than retarget it. Space targeting requires
+`--no-incognito`: incognito-in-space is unverified, and the CLI never silently
+opts you into library history. Use `--no-space` to keep the normal temp-chat
+behavior instead. Unset defaults restore the command's built-ins.
+
+Pi and Hermes inherit these CLI settings when tool arguments are omitted; do
+not configure a second set of adapter defaults. For manual migration from
+legacy Pi settings, copy the desired model/source/space values using the
+commands above and run `pplx login` for cookie authentication. Old Pi settings
+and JWT files are not imported, converted, removed, or overwritten.
+
 ## Examples
 
 ```bash
@@ -120,7 +154,7 @@ pplx temp list                 # live only; --all includes not-yet-swept expired
 pplx temp cleanup              # purge local state for expired temp chats now
 
 # ask inside a space (thread is created in the space)
-pplx ask --space "Money Manager" "summarize my spending trends"
+pplx ask --space "Money Manager" --no-incognito "summarize my spending trends"
 
 # image generation (image-mode models, e.g. nanobanana2): prints a ## Images
 # section with the S3 urls + suggested filenames — urls expire in ~35min
@@ -212,7 +246,7 @@ Everything else completes from the command tree. Degrades silently offline.
 
 | Variable | Effect |
 |---|---|
-| `PPLX_CONFIG_DIR` | override `~/.config/pplx-cli/` (auth store) |
+| `PPLX_CONFIG_DIR` | override `~/.config/pplx-cli/` (auth and settings) |
 | `PPLX_CACHE_DIR` | override `~/.cache/pplx/` (caches, thread state) |
 | `PPLX_COOKIE` | raw Cookie header override — beats the stored jar; works on its own (no `pplx login` needed) |
 | `PPLX_EMAIL`, `PPLX_OTP` | non-interactive OTP login |

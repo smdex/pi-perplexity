@@ -1,231 +1,171 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "./test-helpers.js";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import register from "../src/index.js";
+import { createFakePplx, readJson, withPath, removeDirSoon } from "./fake-pplx.js";
 
-import { SearchError } from "../src/search/types.js";
+function tool() {
+  let registered: any;
+  register({ registerTool(value: unknown) { registered = value; }, registerCommand() {} } as any);
+  return registered;
+}
 
-const originalCacheDir = process.env.PI_PERPLEXITY_CACHE_DIR;
-let cacheDir: string;
-
-beforeEach(async () => {
-  cacheDir = await mkdtemp(join(tmpdir(), "pi-perplexity-threads-"));
-  process.env.PI_PERPLEXITY_CACHE_DIR = cacheDir;
+test("tool delegates to installed pplx without injecting defaults or prompting", async () => {
+  const fake = await createFakePplx();
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const updates: any[] = [];
+  const result = await tool().execute("call-1", { query: "why is the sky blue" }, undefined,
+    (update: unknown) => updates.push(update), { ui: { input() { throw new Error("must not prompt"); } } });
+  assert.deepEqual(await readJson(fake.argvFile), ["ask", "--json", "why is the sky blue"]);
+  assert.match(result.content[0].text, /## Answer\nSky is blue/);
+  assert.match(result.content[0].text, /\[1\] NASA/);
+  assert.equal(result.details.model, "gemini38flash");
+  assert.equal(result.details.sourceCount, 1);
+  assert.equal(result.details.thread, "3f2b8c1a-4d5e-4f6a-9b7c-1d2e3f4a5b6c");
+  assert.ok(updates.length > 0);
+  assert.ok(!JSON.stringify(result).includes("rw-token"));
 });
 
-afterEach(async () => {
-  mock.restore();
-  if (originalCacheDir === undefined) {
-    delete process.env.PI_PERPLEXITY_CACHE_DIR;
-  } else {
-    process.env.PI_PERPLEXITY_CACHE_DIR = originalCacheDir;
+test("explicit overrides remain literal argv, including option-like queries and filenames", async () => {
+  const fake = await createFakePplx();
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const result = await tool().execute("override", {
+    query: '-why $(touch /tmp/not-a-shell) "quoted"', model: "sonar", recency: "week",
+    sources: ["web", "scholar"], files: ["--help", "/tmp/a b.pdf"],
+    thread: "https://www.perplexity.ai/search/3f2b8c1a-4d5e-4f6a-9b7c-1d2e3f4a5b6c",
+    continue: true, space: "My Space", limit: 1,
+  });
+  assert.deepEqual(await readJson(fake.argvFile), [
+    "ask", "--json", ' -why $(touch /tmp/not-a-shell) "quoted"', "--model=sonar", "--recency=week", "--sources=web", "--sources=scholar",
+    "--attach=--help", "--attach=/tmp/a b.pdf", "--thread=3f2b8c1a-4d5e-4f6a-9b7c-1d2e3f4a5b6c",
+    "--continue", "--space=My Space",
+  ]);
+  assert.equal(result.details.sourceCount, 1);
+});
+
+for (const [mode, message] of [
+  ["auth", /pplx login/], ["fail", /HTTP 500/], ["garbage", /JSON result/],
+] as const) {
+  test(`${mode} CLI outcome is a readable tool error without prompting`, async () => {
+    const fake = await createFakePplx(mode);
+    removeDirSoon(fake.dir);
+    withPath(fake.dir);
+    const result = await tool().execute("error", { query: "q" }, undefined, undefined,
+      { ui: { input() { assert.fail("must not prompt"); } } });
+    assert.equal(result.details.isError, true);
+    assert.match(result.content[0].text, message);
+  });
+}
+
+test("missing installed executable reports installation and PATH advice", async () => {
+  const fake = await createFakePplx();
+  removeDirSoon(fake.dir);
+  withPath(`${fake.dir}/missing`, { replace: true });
+  const result = await tool().execute("missing", { query: "q" });
+  assert.equal(result.details.isError, true);
+  assert.match(result.content[0].text, /install.*pplx CLI/);
+  assert.match(result.content[0].text, /PATH/);
+});
+
+test("malformed nested CLI output is reported as invalid JSON result, not a formatter crash", async () => {
+  const fake = await createFakePplx("bad-source");
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const result = await tool().execute("malformed", { query: "q" });
+  assert.equal(result.details.isError, true);
+  assert.match(result.content[0].text, /JSON result/);
+});
+
+test("UTF-8 characters split across process writes survive unchanged", async () => {
+  const fake = await createFakePplx("unicode");
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const result = await tool().execute("unicode", { query: "q" });
+  assert.match(result.content[0].text, /你好 🌍/);
+});
+
+test("already cancelled calls do not start a CLI process", async () => {
+  const fake = await createFakePplx();
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const controller = new AbortController();
+  controller.abort();
+  const result = await tool().execute("cancelled", { query: "q" }, controller.signal);
+  const { exists } = await import("./fake-pplx.js");
+  assert.equal(await exists(fake.argvFile), false);
+  assert.equal(result.details.cancelled, true);
+  assert.match(result.content[0].text, /cancelled/);
+});
+
+for (const mode of ["hang", "stubborn"]) {
+  test(`cancellation terminates and awaits a ${mode} child`, { timeout: 10_000 }, async () => {
+    const { exists, waitFor } = await import("./fake-pplx.js");
+    const fake = await createFakePplx(mode);
+    removeDirSoon(fake.dir);
+    withPath(fake.dir);
+    const controller = new AbortController();
+    const pending = tool().execute("cancel", { query: "q" }, controller.signal);
+    try {
+      await waitFor(() => exists(fake.argvFile));
+    } finally {
+      controller.abort();
+    }
+    const result = await pending;
+    assert.equal(await exists(fake.killedFile), true);
+    const pid = await readJson(fake.pidFile) as number;
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    assert.equal(result.details.cancelled, true);
+    assert.equal(result.details.isError, true);
+    assert.match(result.content[0].text, /cancelled/);
+  });
+}
+
+test("relative attachments are resolved in the Pi session working directory", async () => {
+  const fake = await createFakePplx("cwd");
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const result = await tool().execute("cwd", { query: "q", files: ["notes.txt"] }, undefined, undefined, { cwd: fake.dir });
+  assert.match(result.content[0].text, new RegExp(`## Answer\\n${fake.dir}`));
+});
+
+test("explicit history choice is forwarded, never silently changed for a space", async () => {
+  const fake = await createFakePplx();
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  await tool().execute("history", { query: "q", space: "Team", incognito: false });
+  assert.deepEqual(await readJson(fake.argvFile), ["ask", "--json", "q", "--space=Team", "--no-incognito"]);
+});
+
+test("adapter argv reaches actual CLI authentication rather than failing yargs query parsing", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { resolve, join } = await import("node:path");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  for (const query of ["ordinary question", '--literal ; $(touch NO) "quoted"']) {
+    const fake = await createFakePplx();
+    removeDirSoon(fake.dir);
+    withPath(fake.dir);
+    await tool().execute("parser", { query, model: "sonar", sources: ["web", "scholar"], recency: "week" });
+    const args = await readJson(fake.argvFile) as string[];
+    const home = mkdtempSync(join(tmpdir(), "pi-cli-parser-"));
+    removeDirSoon(home);
+    const probe = spawnSync("bun", [resolve("../../src/index.ts"), ...args], {
+      env: { ...process.env, HOME: home, PPLX_CONFIG_DIR: join(home, "config"), PPLX_CACHE_DIR: join(home, "cache"), PPLX_COOKIE: "" },
+      encoding: "utf8", timeout: 5_000,
+    });
+    assert.equal(probe.status, 2, probe.stderr || probe.stdout || String(probe.error));
+    assert.match(JSON.parse(probe.stdout).error, /pplx login/);
   }
-  await rm(cacheDir, { recursive: true, force: true });
 });
 
-const CREDENTIALS = {
-  jwt: "jwt-token",
-  cookies: ["__Secure-next-auth.session-token=abc"],
-  userAgent: null,
-  email: "user@example.com",
-  source: "cookies" as const,
-};
-
-describe("perplexity_search execute", () => {
-  test("includes effective config values in the search request and result details", async () => {
-    const authenticate = mock(async () => CREDENTIALS);
-    const saveBrowserAuthInput = mock(async () => ({ type: "oauth", access: "jwt-token" }));
-    const loadConfig = mock(async () => ({ model: "gpt54" }));
-    const resolveDefaultModel = mock(() => "gpt54");
-    const searchPerplexity = mock(async () => ({
-      answer: "answer",
-      sources: [{ url: "https://example.com" }],
-      displayModel: "gpt54",
-      uuid: "req-123",
-      slug: "s0000000-0000-4000-8000-000000000001",
-      readWriteToken: "rw-1",
-      backendUuid: "be-1",
-    }));
-
-    mock.module("../src/auth/login.js", () => ({ authenticate, saveBrowserAuthInput }));
-    mock.module("../src/config.js", () => ({
-      getConfigPath: () => "/tmp/pi-perplexity-config.json",
-      loadConfig,
-      resolveDefaultModel,
-      saveConfig: mock(async () => undefined),
-    }));
-    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})), restPostJson: mock(async () => ({})) }));
-
-    const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
-
-    let execute: ((toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any>) | undefined;
-    let parameters: unknown;
-
-    registerExtension({
-      registerCommand() {
-        return undefined;
-      },
-      registerTool(tool: { execute: typeof execute; parameters: unknown }) {
-        execute = tool.execute;
-        parameters = tool.parameters;
-      },
-    } as any);
-
-    expect(execute).toBeDefined();
-    expect(JSON.stringify(parameters)).not.toContain("incognito");
-
-    const result = await execute!(
-      "tool-1",
-      { query: "how many planets", model: "pplx_pro" },
-      undefined,
-      undefined,
-      { ui: {} },
-    );
-
-    expect(loadConfig).toHaveBeenCalledTimes(1);
-    expect(resolveDefaultModel).toHaveBeenCalledWith({ model: "gpt54" });
-    expect(searchPerplexity).toHaveBeenCalledWith(
-      {
-        query: "how many planets",
-        model: "gpt54",
-      },
-      CREDENTIALS,
-      undefined,
-    );
-    expect(result.details.model).toBe("gpt54");
-    expect(result.details.thread).toBe("s0000000-0000-4000-8000-000000000001");
-    expect(result.details.authSource).toBe("cookies");
-  });
-
-  test("thread param reuses stored followup state", async () => {
-    const authenticate = mock(async () => CREDENTIALS);
-    const searchPerplexity = mock(async () => ({
-      answer: "continued answer",
-      sources: [],
-      displayModel: "gpt54",
-      slug: undefined,
-      readWriteToken: "rw-2",
-      backendUuid: "be-2",
-    }));
-
-    mock.module("../src/auth/login.js", () => ({ authenticate }));
-    mock.module("../src/config.js", () => ({
-      getConfigPath: () => "/tmp/pi-perplexity-config.json",
-      loadConfig: mock(async () => ({ model: "gpt54" })),
-      resolveDefaultModel: mock(() => "gpt54"),
-      saveConfig: mock(async () => undefined),
-    }));
-    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})), restPostJson: mock(async () => ({})) }));
-
-    const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
-    const threadsMod = await import(`../src/auth/threads.js?test=${crypto.randomUUID()}`);
-
-    let execute: ((toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any>) | undefined;
-    registerExtension({
-      registerCommand() {
-        return undefined;
-      },
-      registerTool(tool: { execute: typeof execute }) {
-        execute = tool.execute;
-      },
-    } as any);
-
-    // seed one thread state via the real threads module (isolated cache dir)
-    const slug = "c0000000-0000-4000-8000-000000000004";
-    await threadsMod.saveThreadState({
-      slug,
-      readWriteToken: "rw-seed",
-      lastBackendUuid: "be-seed",
-      url: `https://www.perplexity.ai/search/${slug}`,
-      updatedAt: new Date().toISOString(),
-      query: "seed",
-      incognito: true,
-      createdAt: new Date().toISOString(),
-    });
-
-    const result = await execute!("tool-2", { query: "follow-up", thread: slug }, undefined, undefined, { ui: {} });
-
-    const lastCall = (searchPerplexity as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1);
-    expect(lastCall?.[0]).toMatchObject({
-      query: "follow-up",
-      followup: { lastBackendUuid: "be-seed", readWriteToken: "rw-seed" },
-    });
-    expect(lastCall?.[1]).toEqual(CREDENTIALS);
-    expect(lastCall?.[2]).toBe(undefined);
-
-    expect(result.details.continued).toBe(slug);
-    // follow-up over an existing incognito thread keeps its original TTL anchor
-    const state = await threadsMod.loadThreadState(slug);
-    expect(state?.readWriteToken).toBe("rw-2");
-  });
-
-  test("continue=true without live sessions returns a helpful error", async () => {
-    mock.module("../src/auth/login.js", () => ({ authenticate: mock(async () => CREDENTIALS) }));
-    mock.module("../src/config.js", () => ({
-      getConfigPath: () => "/tmp/pi-perplexity-config.json",
-      loadConfig: mock(async () => ({ model: "gpt54" })),
-      resolveDefaultModel: mock(() => "gpt54"),
-      saveConfig: mock(async () => undefined),
-    }));
-    mock.module("../src/search/client.js", () => ({
-      searchPerplexity: mock(async () => ({})),
-      restGetJson: mock(async () => ({})),
-      restPostJson: mock(async () => ({})),
-    }));
-
-    const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
-
-    let execute: ((toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any>) | undefined;
-    registerExtension({
-      registerCommand() {
-        return undefined;
-      },
-      registerTool(tool: { execute: typeof execute }) {
-        execute = tool.execute;
-      },
-    } as any);
-
-    const result = await execute!("tool-3", { query: "q", continue: true }, undefined, undefined, { ui: {} });
-    expect(result.details.isError).toBe(true);
-    expect(result.content[0].text).toContain("No live Perplexity session");
-  });
-
-  test("does not clear cached credentials on Perplexity auth rejection", async () => {
-    const authenticate = mock(async () => "jwt-token");
-    const saveBrowserAuthInput = mock(async () => ({ type: "oauth", access: "jwt-token" }));
-    const clearToken = mock(async () => undefined);
-    const loadConfig = mock(async () => ({}));
-    const resolveDefaultModel = mock(() => "pplx_pro_upgraded");
-    const searchPerplexity = mock(async () => {
-      throw new SearchError("AUTH", "Perplexity rejected authentication (401/403).");
-    });
-
-    mock.module("../src/auth/login.js", () => ({ authenticate, saveBrowserAuthInput }));
-    mock.module("../src/auth/storage.js", () => ({ clearToken }));
-    mock.module("../src/config.js", () => ({
-      getConfigPath: () => "/tmp/pi-perplexity-config.json",
-      loadConfig,
-      resolveDefaultModel,
-      saveConfig: mock(async () => undefined),
-    }));
-    mock.module("../src/search/client.js", () => ({ searchPerplexity, restGetJson: mock(async () => ({})), restPostJson: mock(async () => ({})) }));
-
-    const { default: registerExtension } = await import(`../src/index.js?test=${crypto.randomUUID()}`);
-
-    let execute: ((toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any>) | undefined;
-    registerExtension({
-      registerCommand() {
-        return undefined;
-      },
-      registerTool(tool: { execute: typeof execute }) {
-        execute = tool.execute;
-      },
-    } as any);
-
-    const result = await execute!("tool-1", { query: "hello" }, undefined, undefined, { ui: {} });
-
-    expect(result.details.isError).toBe(true);
-    expect(String(result.content[0].text)).toContain("Perplexity search failed");
-    expect(clearToken).toHaveBeenCalledTimes(0);
-  });
+test("empty explicit sources cannot silently fall back to a configured scope", async () => {
+  const fake = await createFakePplx();
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const result = await tool().execute("scope", { query: "q", sources: [] });
+  const { exists } = await import("./fake-pplx.js");
+  assert.equal(result.details.isError, true);
+  assert.match(result.content[0].text, /sources.*nonempty/i);
+  assert.equal(await exists(fake.argvFile), false);
 });

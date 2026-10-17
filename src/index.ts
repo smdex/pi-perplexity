@@ -15,6 +15,7 @@ import { buildCompletion } from "./complete.js";
 import { askCommand, researchCommand } from "./commands/ask.js";
 import { chatsCommand } from "./commands/chats.js";
 import { completionCommand } from "./commands/completion.js";
+import { configCommand } from "./commands/config.js";
 import { connectorsCommand } from "./commands/connectors.js";
 import { loginCommand } from "./commands/login.js";
 import { modelsCommand } from "./commands/models.js";
@@ -41,6 +42,7 @@ const y = yargs(hideBin(process.argv))
   .command(askCommand)
   .command(researchCommand)
   .command(chatsCommand)
+  .command(configCommand)
   .command(spacesCommand)
   .command(tempCommand)
   .command(connectorsCommand)

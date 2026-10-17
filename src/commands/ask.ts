@@ -8,12 +8,12 @@ import { resolveSpace } from "../api/spaces.js";
 import { libraryThreads, sidebarThreads } from "../api/graphql.js";
 import { isTempExpired, isTempLive, listThreadStates, loadThreadState, saveThreadState, tempRemaining, type ThreadState } from "../config.js";
 import { renderAnswer } from "../render/markdown.js";
+import { AnswerStreamPrinter } from "../render/answer-stream.js";
 import { StderrSpinner } from "../render/spinner.js";
 import { copyToClipboard, out, run, threadSlugFromRef, warn } from "./util.js";
 
 /**
- * pplx ask <query..> — streams the answer to stdout as snapshots arrive
- * (only the newly appended suffix is written; snapshots are full-state).
+ * pplx ask <query..> — previews snapshots in a terminal; pipes get the final answer.
  * pplx research <query..> — same flow on the deep-research engine:
  * model_preference "pplx_alpha" (verified r-summary §1), no cache key;
  * longer runtime, separate quota family (agentic_research).
@@ -79,8 +79,13 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
   const query = argv.query.join(" ").trim();
   if (!query) throw new Error("query is required (pplx ask \"your question\")");
   const json = argv.json === true;
-  const streamToStdout = argv.stream !== false && !json;
+  const streamToStdout = argv.stream !== false && !json && process.stdout.isTTY === true;
 
+  const printer = new AnswerStreamPrinter(process.stdout);
+  const abort = new AbortController();
+  const interrupt = (): void => abort.abort(new DOMException("interrupted", "AbortError"));
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
   const spinner = new StderrSpinner();
   spinner.start(mode === "research" ? "running deep research (may take minutes)…" : "asking Perplexity…");
 
@@ -126,23 +131,9 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
       attachments = uploaded;
     }
 
-    // stream: write only the newly appended suffix (snapshots are full-state).
-    // The webapp sometimes REWRITES already-shown text (chunk_starting_offset
-    // updates shrink the text, it regrows later) — on shrink, resync by
-    // reprinting the full snapshot instead of silently desyncing.
-    let printed = "";
-    let spinnerStopped = false;
     const onEvent = (partialAnswer: string): void => {
-      if (!partialAnswer) return;
-      if (!spinnerStopped) {
-        spinnerStopped = true;
-        spinner.stop();
-      }
-      if (streamToStdout && partialAnswer.startsWith(printed)) {
-        const suffix = partialAnswer.slice(printed.length);
-        process.stdout.write(suffix);
-        printed = partialAnswer;
-      }
+      if (partialAnswer) spinner.stop();
+      if (streamToStdout) printer.update(partialAnswer);
     };
 
     const result = await streamAsk(
@@ -157,21 +148,12 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
         ...(space ? { space } : {}),
         ...(mode === "research" ? { research: true } : {}),
       },
-      { onEvent },
+      { onEvent, signal: abort.signal },
     );
     spinner.stop();
 
-    // final flush: anything not yet printed (no-stream mode prints everything here)
     if (!json) {
-      if (result.answer !== printed) {
-        if (result.answer.startsWith(printed)) process.stdout.write(result.answer.slice(printed.length));
-        else if (printed === "") process.stdout.write(result.answer);
-        else {
-          // Snapshot rewrote shown text (shrunk, then regrew differently) — the
-          // streamed prefix is stale: reprint the corrected answer on a fresh line.
-          process.stdout.write(`\n\n${result.answer}`);
-        }
-      }
+      printer.finish(result.answer);
       process.stdout.write("\n\n");
       // The answer text was already written above (streamed or flushed) — the
       // trailing block carries only sources / follow-ups / meta (plan §4.9).
@@ -264,6 +246,9 @@ async function executeAsk(argv: AskArgs, mode: "search" | "research"): Promise<v
     }
   } finally {
     spinner.stop();
+    printer.restore();
+    process.off("SIGINT", interrupt);
+    process.off("SIGTERM", interrupt);
   }
 }
 
@@ -292,7 +277,7 @@ function askOptions(y: Argv): Argv {
       type: "string",
       describe: "write the final reply (answer + sources/meta, or JSON with --json) to this file",
     })
-    .option("stream", { type: "boolean", default: true, describe: "stream the answer while generating" });
+    .option("stream", { type: "boolean", default: true, describe: "preview the answer while generating in a terminal (pipes receive only the final result)" });
 }
 
 export const askCommand: CommandModule = {

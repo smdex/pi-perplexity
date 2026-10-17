@@ -2,17 +2,16 @@
 
 The flake uses flake-parts and locked `nixos-unstable`. It exposes
 `packages.<system>.pplx` and `packages.<system>.default` for `x86_64-linux`,
-`aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`.
+`aarch64-linux`, and `aarch64-darwin`: exactly three supported systems, all
+using `github:NixOS/nixpkgs/nixos-unstable`.
 
-## Intel Darwin compatibility
+## Unsupported Intel Darwin
 
-Nixpkgs unstable 26.11 rejects `x86_64-darwin` outright. Only that output uses
-the separately locked `nixpkgs-intel-darwin` input from
-`github:NixOS/nixpkgs/nixpkgs-26.05-darwin`, the last supporting branch.
-The other three systems use `github:NixOS/nixpkgs/nixos-unstable`.
-Updating the lock must preserve successful evaluation of all four outputs;
-Intel Darwin's upstream support lifetime is limited. Evaluation is not a
-native runtime guarantee.
+`x86_64-darwin` is unsupported because current nixpkgs unstable 26.11 dropped
+it and rejects evaluation with `Nixpkgs 26.11 has dropped support for
+x86_64-darwin.` There is no stable-input fallback. This three-system scope
+is the user-approved exception to the original four-platform specification.
+Evaluation of an output is not a native runtime guarantee.
 
 ## Build and install
 
@@ -45,7 +44,7 @@ Perplexity requests or authentication are needed to build or check help.
 ## Verification
 
 ```sh
-for system in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
+for system in x86_64-linux aarch64-linux aarch64-darwin; do
   nix eval --raw .#packages.$system.pplx.drvPath
   nix eval --raw .#packages.$system.default.drvPath
 done

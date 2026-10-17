@@ -4,9 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    # Unstable 26.11 removed Intel Darwin; retain the last supported branch
-    # only for that platform, rather than silently dropping its output.
-    nixpkgs-intel-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
   };
 
   outputs =
@@ -15,14 +12,12 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
 
       perSystem =
         {
           pkgs,
-          system,
           self',
           ...
         }:
@@ -30,10 +25,6 @@
           pplx = pkgs.callPackage ./package.nix { };
         in
         {
-          _module.args.pkgs = import (
-            if system == "x86_64-darwin" then inputs.nixpkgs-intel-darwin else inputs.nixpkgs
-          ) { inherit system; };
-
           packages.pplx = pplx;
           packages.default = self'.packages.pplx;
 

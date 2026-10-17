@@ -1,6 +1,6 @@
-import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { TEMP_TTL_MS } from "./constants.js";
 import type { GeneratedImage, WebResultRef } from "./api/sse.js";
 
@@ -54,6 +54,95 @@ export function authPath(): string {
   return join(configDir(), "auth.json");
 }
 
+// ---------------------------------------------------------------- settings
+
+/** Keys allowed in the persistent defaults file (spec docs/pplx-cli-spec.md §3). */
+export const SETTING_KEYS = ["model", "sources", "space"] as const;
+export type SettingKey = (typeof SETTING_KEYS)[number];
+
+/** Persistent CLI defaults: explicit invocation flags win over these values. */
+export interface PplxSettings {
+  /** Default model slug for `pplx ask` (`pplx research` always uses its own engine). */
+  model?: string;
+  /** Default source/connector ids — an explicit --sources REPLACES this list. */
+  sources?: string[];
+  /** Default space title or uuid for new threads (--space wins; --no-space bypasses). */
+  space?: string;
+}
+
+export function settingsPath(): string {
+  return join(configDir(), "config.json");
+}
+
+/** Parse + validate a settings object; throws naming the offending key. */
+export function parseSettings(raw: unknown): PplxSettings {
+  if (!isRecord(raw)) {
+    throw new Error(`settings: expected a JSON object (keys: ${SETTING_KEYS.join(", ")})`);
+  }
+  const unknownKeys = Object.keys(raw).filter((key) => !(SETTING_KEYS as readonly string[]).includes(key));
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `settings: unsupported key ${JSON.stringify(unknownKeys[0])} (valid keys: ${SETTING_KEYS.join(", ")})`,
+    );
+  }
+  const next: PplxSettings = {};
+  const { model, sources, space } = raw;
+  if (model !== undefined) {
+    if (!isNonEmptyString(model)) {
+      throw new Error('settings: "model" must be a non-empty model slug (see `pplx models`)');
+    }
+    next.model = model;
+  }
+  if (sources !== undefined) {
+    if (!Array.isArray(sources) || sources.length === 0 || !sources.every((s) => isNonEmptyString(s))) {
+      throw new Error('settings: "sources" must be a non-empty array of connector ids (see `pplx connectors`)');
+    }
+    next.sources = [...new Set(sources)]; // dedupe, first-seen order
+  }
+  if (space !== undefined) {
+    if (!isNonEmptyString(space)) {
+      throw new Error('settings: "space" must be a non-empty space title or uuid (see `pplx spaces list`)');
+    }
+    next.space = space;
+  }
+  return next;
+}
+
+/** Load persisted defaults. {} when absent; a present-but-invalid file throws
+ * (fail closed: an unreadable setting must never silently change request scope). */
+export async function loadSettings(): Promise<PplxSettings> {
+  let raw: string;
+  try {
+    raw = await readFile(settingsPath(), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(`settings: cannot read ${settingsPath()}: ${(err as Error).message}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`settings: ${settingsPath()} is not valid JSON — fix it or remove the file`);
+  }
+  return parseSettings(parsed);
+}
+
+/** Persist defaults atomically: validate first (nothing is written on error),
+ * write a new 0600 temp file next to the target, then rename over it. */
+export async function saveSettings(next: PplxSettings): Promise<void> {
+  const settings = parseSettings(next);
+  const path = settingsPath();
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${crypto.randomUUID()}`);
+  try {
+    await writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {}); // never leave temp garbage behind
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 export function cachePath(key: string): string {
   return join(cacheDir(), `${key}.json`);
 }
@@ -71,6 +160,10 @@ export function threadStatePath(slug: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function nonEmptyString(value: unknown): string | null {

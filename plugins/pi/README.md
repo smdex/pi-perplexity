@@ -54,8 +54,8 @@ Results contain Answer, numbered Sources, optional Images and Follow-ups, and
 Meta sections. Meta includes the CLI session identifier when available; session
 state is managed only by the CLI. Complete structured results are returned
 rather than incremental answer streaming. Pi displays progress while waiting;
-cancellation terminates the child (SIGTERM, then SIGKILL after five seconds if
-needed) and awaits its exit. CLI failures return readable text and error details
+cancellation terminates the child (and its owned process group on POSIX), with
+SIGTERM then SIGKILL after five seconds if needed, and awaits its exit. CLI failures return readable text and error details
 for the tool renderer, not raw exceptions or credentials.
 
 ## Migrating from the old Pi client
@@ -82,7 +82,9 @@ npm run typecheck
 node --no-deprecation --import ./node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-register.mjs --input-type=module -e "import('./src/index.ts').then((m)=>{ const entry = m.default?.default ?? m.default; if (typeof entry !== 'function') throw new Error('default export missing'); })"
 ```
 
-Tests use a fake installed `pplx`, never the live service. No new runtime
+Tests use a fake installed `pplx`, never the live service. The CLI parser
+regression also requires the repository's Bun runtime and root CLI sources; it
+runs with fresh empty authentication and expects a login error before networking. No new runtime
 dependency is required; Pi supplies its host packages and the adapter uses Node
 18.14.1+ subprocess APIs.
 

@@ -169,6 +169,8 @@ export async function runPplxAsk(params: PplxAskParams, signal?: AbortSignal, cw
       ...(cwd ? { cwd } : {}),
       env: { ...process.env, PPLX_NO_SPINNER: "1" },
       windowsHide: true,
+      // An owned POSIX group also covers non-exec PATH wrappers.
+      detached: process.platform !== "win32",
     });
   } catch {
     return { kind: "error", message: INSTALL_HINT };
@@ -195,10 +197,16 @@ export async function runPplxAsk(params: PplxAskParams, signal?: AbortSignal, cw
   });
 
   let killTimer: NodeJS.Timeout | undefined;
+  const terminate = (signalName: NodeJS.Signals): void => {
+    if (process.platform !== "win32" && child.pid) {
+      try { process.kill(-child.pid, signalName); } catch { /* group already exited */ }
+    } else {
+      child.kill(signalName);
+    }
+  };
   const onAbort = (): void => {
-    if (child.killed) return;
-    child.kill("SIGTERM");
-    killTimer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+    terminate("SIGTERM");
+    killTimer = setTimeout(() => terminate("SIGKILL"), KILL_GRACE_MS);
     killTimer.unref?.();
   };
   signal?.addEventListener("abort", onAbort, { once: true });

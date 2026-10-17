@@ -9,6 +9,8 @@ export interface FakePplx {
   argvFile: string;
   killedFile: string;
   pidFile: string;
+  descendantFile: string;
+  descendantKilledFile: string;
   result: Record<string, unknown>;
 }
 
@@ -17,6 +19,8 @@ export async function createFakePplx(mode?: string): Promise<FakePplx> {
   const argvFile = join(dir, "argv.json");
   const killedFile = join(dir, "killed");
   const pidFile = join(dir, "pid.json");
+  const descendantFile = join(dir, "descendant.json");
+  const descendantKilledFile = join(dir, "descendant-killed");
   const result = {
     answer: "Sky is blue because molecules scatter short wavelengths (Rayleigh scattering).",
     readWriteToken: "rw-token",
@@ -40,9 +44,26 @@ const mode = ${JSON.stringify(mode ?? "ok")};
 const argvFile = ${JSON.stringify(argvFile)};
 fs.writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify(process.pid));
 fs.writeFileSync(argvFile, JSON.stringify(process.argv.slice(2)));
-if (mode === "hang" || mode === "stubborn") {
+if (mode === "wrapper") {
+  const { spawn } = require("node:child_process");
+  spawn(process.execPath, ["-e", ${JSON.stringify(`
+    const fs = require("node:fs");
+    process.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(descendantKilledFile)}, "term"); process.exit(0); });
+    fs.writeFileSync(${JSON.stringify(descendantFile)}, JSON.stringify(process.pid));
+    setInterval(() => {}, 1000);
+  `)}], { stdio: "inherit" });
+  process.on("SIGTERM", () => process.exit(0));
+} else if (mode === "hang" || mode === "stubborn") {
   process.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(killedFile)}, "term"); if (mode !== "stubborn") process.exit(143); });
   setInterval(() => {}, 1000);
+} else if (mode === "auth-bare") {
+  process.stdout.write(JSON.stringify({ error: "Session expired." }));
+  process.exit(2);
+} else if (mode === "stderr") {
+  process.stderr.write("Invalid source identifier; see pplx connectors.");
+  process.exit(1);
+} else if (mode === "empty-object") {
+  process.stdout.write("{}");
 } else if (mode === "auth") {
   process.stdout.write(JSON.stringify({ error: "Not logged in. Run pplx login (paste cookies from a logged-in browser)." }) + "\\n");
   process.exit(2);
@@ -67,7 +88,7 @@ if (mode === "hang" || mode === "stubborn") {
 `;
   writeFileSync(join(dir, "pplx"), script);
   chmodSync(join(dir, "pplx"), 0o755);
-  return { dir, argvFile, killedFile, pidFile, result };
+  return { dir, argvFile, killedFile, pidFile, descendantFile, descendantKilledFile, result };
 }
 
 const cleanups: Array<() => void> = [];

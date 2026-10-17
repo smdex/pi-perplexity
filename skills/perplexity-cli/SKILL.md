@@ -40,7 +40,7 @@ fabricate one. Do not edit files under `~/.config/pplx-cli/`.
 ## Core patterns
 
 ```bash
-# One-shot question, markdown out (default model: gemini38flash)
+# One-shot question, markdown out (inherits CLI settings; built-in model: gemini38flash)
 pplx ask "question"
 
 # Structured result for reliable parsing (single JSON object on stdout)
@@ -53,7 +53,7 @@ pplx ask --save reply.md "question"
 pplx ask --model <slug> "question"              # slugs: pplx models (any slug passes through)
 pplx ask --sources web scholar "question"       # ids: pplx connectors --all
 pplx ask --attach report.pdf "question"         # uploads, then asks about it
-pplx ask --space "Money Manager" "question"     # uuid works too; thread is created in the space
+pplx ask --space "Money Manager" --no-incognito "question"     # uuid works too; thread is created in the space
 
 # Image generation (image-mode models, e.g. nanobanana2) — output carries a
 # ## Images section: S3 url, caption, dims, suggested filename. Urls are
@@ -89,6 +89,16 @@ pplx spaces create "Recipes" --emoji 1f37d --instructions "metric units"
 pplx spaces rename <uuid|title> "New name"
 pplx spaces delete <ref>                        # typed confirmation (see Destructive ops)
 ```
+
+Shared defaults live in the CLI's `config.json`, separate from auth. Use
+`pplx config get` to inspect them; change them only at the user's request with
+`pplx config set model <id>`, `set sources <id...>`, `set space <ref>`, or
+`unset <key>`. Explicit ask/tool options override saved values. `--sources web`
+replaces configured connectors; `--no-space` bypasses a configured space once.
+Unavailable configured scope fails rather than falling back. Space targeting
+requires `--no-incognito` (library history); the CLI will not change privacy
+silently. Configured spaces apply only to new threads, with a warning on
+follow-ups. Research retains its own engine, ignoring saved model settings.
 
 Model/slug behavior: any string passes through `--model`; `pplx models` lists
 the live catalog from `/rest/models/config` (default: search-mode slugs,

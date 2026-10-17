@@ -45,7 +45,8 @@ test("explicit overrides remain literal argv, including option-like queries and 
 });
 
 for (const [mode, message] of [
-  ["auth", /pplx login/], ["fail", /HTTP 500/], ["garbage", /JSON result/],
+  ["auth", /pplx login/], ["auth-bare", /pplx login/], ["fail", /HTTP 500/],
+  ["stderr", /Invalid source identifier/], ["garbage", /JSON result/], ["empty-object", /JSON result/],
 ] as const) {
   test(`${mode} CLI outcome is a readable tool error without prompting`, async () => {
     const fake = await createFakePplx(mode);
@@ -168,4 +169,28 @@ test("empty explicit sources cannot silently fall back to a configured scope", a
   assert.equal(result.details.isError, true);
   assert.match(result.content[0].text, /sources.*nonempty/i);
   assert.equal(await exists(fake.argvFile), false);
+});
+
+test("POSIX cancellation terminates CLI wrapper descendants too", { skip: process.platform === "win32" }, async () => {
+  const { exists, waitFor } = await import("./fake-pplx.js");
+  const fake = await createFakePplx("wrapper");
+  removeDirSoon(fake.dir);
+  withPath(fake.dir);
+  const controller = new AbortController();
+  const pending = tool().execute("wrapper", { query: "q" }, controller.signal);
+  await waitFor(() => exists(fake.descendantFile));
+  const pid = await readJson(fake.descendantFile) as number;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    controller.abort();
+    const result = await Promise.race([pending, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("descendant kept CLI pipes open after cancellation")), 1_000);
+    })]);
+    assert.equal(result.details.cancelled, true);
+    assert.equal(await exists(fake.descendantKilledFile), true);
+  } finally {
+    if (timer) clearTimeout(timer);
+    try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ }
+    await pending;
+  }
 });

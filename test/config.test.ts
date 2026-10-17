@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtemp, rm, stat, utimes, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, utimes, writeFile, readFile, readdir, open, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,11 +12,16 @@ import {
   isTempExpired,
   isTempLive,
   loadAuth,
+  loadSettings,
   loadThreadState,
   listThreadStates,
+  parseSettings,
   readCache,
   saveAuth,
+  saveSettings,
   saveThreadState,
+  settingsPath,
+  SETTING_KEYS,
   tempRemaining,
   threadStatePath,
   upsertCookie,
@@ -154,6 +159,115 @@ describe("cache", () => {
     expect(await readCache("nope", 60_000)).toBeNull();
     await writeFile(cachePath("bad"), "not-json", { encoding: "utf8" });
     expect(await readCache("bad", 60_000)).toBeNull();
+  });
+});
+
+describe("settings store (config.json defaults)", () => {
+  it("settingsPath respects PPLX_CONFIG_DIR (settings live beside, never inside, auth.json)", () => {
+    expect(settingsPath()).toBe(join(cfgDir, "config.json"));
+    expect(settingsPath()).not.toBe(authPath());
+  });
+
+  it("loadSettings returns {} when no settings file exists", async () => {
+    await rm(settingsPath(), { force: true });
+    expect(await loadSettings()).toEqual({});
+  });
+
+  it("saveSettings/loadSettings round-trips model, sources, and space", async () => {
+    await saveSettings({ model: "glm_5_3_thinking", sources: ["web", "scholar"], space: "Budgets" });
+    expect(await loadSettings()).toEqual({ model: "glm_5_3_thinking", sources: ["web", "scholar"], space: "Budgets" });
+    await rm(settingsPath(), { force: true });
+  });
+
+  it("saveSettings writes 0600 and tightens a pre-existing 0644 file", async () => {
+    await writeFile(settingsPath(), "garbage-but-will-be-replaced\n", { mode: 0o644 });
+    await saveSettings({ model: "m" });
+    expect((await stat(settingsPath())).mode & 0o777).toBe(0o600);
+    // and again over the now-0600 file (chmod-on-existing path)
+    await saveSettings({ model: "m2" });
+    expect((await stat(settingsPath())).mode & 0o777).toBe(0o600);
+    await rm(settingsPath(), { force: true });
+  });
+
+  it("saveSettings is atomic: config dir holds only config.json afterwards (no temp leftovers)", async () => {
+    await saveSettings({ sources: ["web"] });
+    const names = (await readdir(cfgDir)).filter((n) => n.includes("tmp") || n === "config.json");
+    expect(names).toEqual(["config.json"]);
+    await rm(settingsPath(), { force: true });
+  });
+
+  it("replacement leaves an already-open reader on the old complete file", async () => {
+    await saveSettings({ model: "old" });
+    const reader = await open(settingsPath(), "r");
+    try {
+      await saveSettings({ model: "new" });
+      expect(JSON.parse(await reader.readFile("utf8"))).toEqual({ model: "old" });
+      expect(await loadSettings()).toEqual({ model: "new" });
+    } finally {
+      await reader.close();
+      await rm(settingsPath(), { force: true });
+    }
+  });
+
+  it("a failed replacement cleans up its temporary file and reports the failure", async () => {
+    await mkdir(settingsPath());
+    try {
+      await expect(saveSettings({ model: "new" })).rejects.toThrow();
+      expect((await stat(settingsPath())).isDirectory()).toBe(true);
+      expect((await readdir(cfgDir)).filter(n => n.startsWith(".config.json.tmp-"))).toEqual([]);
+      await expect(loadSettings()).rejects.toThrow(/cannot read/);
+    } finally {
+      await rm(settingsPath(), { recursive: true, force: true });
+    }
+  });
+
+  it("saveSettings rejects invalid values without touching the existing file", async () => {
+    await saveSettings({ model: "keep" });
+    const before = await readFile(settingsPath(), "utf8");
+    await expect(saveSettings({ model: "" })).rejects.toThrow(/model/);
+    await expect(saveSettings({ sources: [] })).rejects.toThrow(/sources/);
+    await expect(saveSettings({ sources: ["web", ""] })).rejects.toThrow(/sources/);
+    await expect(saveSettings({ space: "" })).rejects.toThrow(/space/);
+    await expect(saveSettings({ nope: "x" } as Record<string, unknown>)).rejects.toThrow(/nope/);
+    expect(await readFile(settingsPath(), "utf8")).toBe(before);
+    await rm(settingsPath(), { force: true });
+  });
+
+  it("rejects whitespace-only settings without replacing a valid file", async () => {
+    await saveSettings({ model: "keep" });
+    await expect(saveSettings({ model: "  " })).rejects.toThrow(/model/);
+    await expect(saveSettings({ sources: ["\t"] })).rejects.toThrow(/sources/);
+    await expect(saveSettings({ space: "  " })).rejects.toThrow(/space/);
+    expect(await loadSettings()).toEqual({ model: "keep" });
+    await rm(settingsPath(), { force: true });
+  });
+
+  it("loadSettings throws a readable error on corrupt JSON and leaves the file intact", async () => {
+    await writeFile(settingsPath(), "{not json", { encoding: "utf8" });
+    await expect(loadSettings()).rejects.toThrow("not valid JSON");
+    await expect(loadSettings()).rejects.toThrow(settingsPath());
+    expect(await readFile(settingsPath(), "utf8")).toBe("{not json");
+    await rm(settingsPath(), { force: true });
+  });
+
+  it("loadSettings rejects unknown keys and wrong types, naming the offender", async () => {
+    await writeFile(settingsPath(), JSON.stringify({ model: "ok", frobnicate: 1 }), { encoding: "utf8" });
+    await expect(loadSettings()).rejects.toThrow(/frobnicate/);
+    await writeFile(settingsPath(), JSON.stringify({ model: 42 }), { encoding: "utf8" });
+    await expect(loadSettings()).rejects.toThrow(/model/);
+    await writeFile(settingsPath(), JSON.stringify({ sources: "web" }), { encoding: "utf8" });
+    await expect(loadSettings()).rejects.toThrow(/sources/);
+    await writeFile(settingsPath(), JSON.stringify({ sources: ["web", 3] }), { encoding: "utf8" });
+    await expect(loadSettings()).rejects.toThrow(/sources/);
+    await rm(settingsPath(), { force: true });
+  });
+
+  it("parseSettings dedupes sources preserving first-seen order", () => {
+    expect(parseSettings({ sources: ["scholar", "web", "scholar"] })).toEqual({ sources: ["scholar", "web"] });
+  });
+
+  it("SETTING_KEYS is exactly model, sources, space", () => {
+    expect([...SETTING_KEYS]).toEqual(["model", "sources", "space"]);
   });
 });
 

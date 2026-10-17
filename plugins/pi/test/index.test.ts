@@ -31,7 +31,7 @@ describe("extension entrypoint", () => {
     } as any);
 
     const props = (schema as { properties?: Record<string, unknown> }).properties ?? {};
-    for (const key of ["query", "files", "thread", "continue", "recency", "limit", "model", "sources", "space"]) {
+    for (const key of ["query", "files", "thread", "continue", "recency", "limit", "model", "sources", "space", "incognito"]) {
       expect(props[key]).toBeDefined();
     }
   });

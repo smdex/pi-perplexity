@@ -129,7 +129,7 @@ and JWT files are not imported, converted, removed, or overwritten.
 ## Examples
 
 ```bash
-# ask — answer streams to stdout while generating; the chat is incognito
+# ask — live terminal preview (final-only when piped); the chat is incognito
 # ("temp") by default: disposable, kept out of library history, auto-deleted by
 # Perplexity ~24h after creation. The CLI reports the temp chat id + TTL.
 pplx ask "what changed in the Rust 2024 edition?"
@@ -186,7 +186,15 @@ pplx connectors             # connected sources (--all: full catalog)
 pplx completion bash        # shell script (bash | zsh | fish)
 ```
 
-Ask output: the answer text streams to stdout as it is generated, then a trailing
+Ask output: interactive terminals show a revisable answer preview in an alternate
+screen. On completion the original screen is restored and the final answer is
+printed once. `--no-stream` disables the preview (use it for terminals without
+alternate-screen support). Redirected stdout buffers until
+completion; `--json` and `--save` contain only the final result, without preview
+controls or stale text. Errors, interrupted requests, and truncated streams do
+not produce a successful partial result.
+
+The final answer is followed by a trailing
 block with `## Sources` (numbered citations, when the model returns web
 results), `## Images` (image-mode asks: S3 urls + suggested filenames + expiry
 warning — the presigned urls die in ~35min, so download with `--save-images`

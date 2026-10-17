@@ -24,6 +24,10 @@ export async function* readSseFrames(
   signal?: AbortSignal | undefined,
 ): AsyncGenerator<SseFrame> {
   const reader = body.getReader();
+  // A signal must wake a parked read, including streams supplied by callers
+  // rather than fetch (whose body usually handles cancellation itself).
+  const cancel = (): void => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener("abort", cancel, { once: true });
   const decoder = new TextDecoder();
   let buffered = "";
   let event: string | null = null;
@@ -41,6 +45,7 @@ export async function* readSseFrames(
     while (true) {
       if (signal?.aborted) return;
       const { value, done } = await reader.read();
+      if (signal?.aborted) return;
       if (done) break;
       buffered += decoder.decode(value, { stream: true });
       while (true) {
@@ -72,7 +77,9 @@ export async function* readSseFrames(
     if (frame) yield frame;
   } finally {
     // Early return (terminal event / abort) — release the underlying stream.
+    signal?.removeEventListener("abort", cancel);
     await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 

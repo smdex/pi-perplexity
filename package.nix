@@ -4,11 +4,11 @@
   bun,
 }:
 let
-  # Single source of truth for the version: cli/package.json.
-  version = (lib.importJSON ./cli/package.json).version;
+  # Single source of truth for the version: root package.json.
+  version = (lib.importJSON ./package.json).version;
 
   # Fetch npm deps in a fixed-output derivation (network allowed here, not in
-  # the main build). Reuses cli/bun.lock; --frozen-lockfile keeps it honest.
+  # the main build). Reuses bun.lock; --frozen-lockfile keeps it honest.
   fetchBunDeps =
     { src, hash }:
     stdenvNoCC.mkDerivation {
@@ -18,8 +18,9 @@ let
 
       buildPhase = ''
         runHook preBuild
-        export HOME=$TMPDIR
-        export XDG_CACHE_HOME=$TMPDIR/xdg-cache
+        export HOME=$(mktemp -d)
+        export PPLX_CONFIG_DIR=$HOME/config PPLX_CACHE_DIR=$HOME/cache PPLX_COOKIE=
+        export XDG_CACHE_HOME=$HOME/xdg-cache
         bun install --frozen-lockfile --production --ignore-scripts --no-progress
         runHook postBuild
       '';
@@ -38,7 +39,30 @@ let
       outputHash = hash;
     };
 
-  src = ./cli;
+  # The CLI lives at the repository root. Ship exactly the files the build
+  # needs — manifest, lockfile, sources, agent skill — so store sources never
+  # pick up node_modules, local state, docs, or research captures regardless
+  # of how the expression is entered (flake or plain nix-build).
+  src = lib.cleanSourceWith {
+    name = "pplx-source";
+    src = ./.;
+    filter =
+      path: type:
+      let
+        rel = lib.removePrefix (toString ./. + "/") (toString path);
+      in
+      if type == "directory" then
+        rel == ""
+        || rel == "src"
+        || rel == "skills"
+        || lib.hasPrefix "src/" rel
+        || lib.hasPrefix "skills/" rel
+      else
+        rel == "package.json"
+        || rel == "bun.lock"
+        || lib.hasPrefix "src/" rel
+        || lib.hasPrefix "skills/" rel;
+  };
 
   bunDeps = fetchBunDeps {
     inherit src;
@@ -59,8 +83,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cp -R ${bunDeps}/node_modules ./node_modules
     chmod -R u+w node_modules
 
-    export HOME=$TMPDIR
-    export XDG_CACHE_HOME=$TMPDIR/xdg-cache
+    export HOME=$(mktemp -d)
+    export PPLX_CONFIG_DIR=$HOME/config PPLX_CACHE_DIR=$HOME/cache PPLX_COOKIE=
+    export XDG_CACHE_HOME=$HOME/xdg-cache
 
     # Single self-contained bundle targeting the bun runtime (bun:sqlite and
     # other bun builtins stay external, provided by the bun interpreter).

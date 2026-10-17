@@ -36,13 +36,22 @@ pplx --help
 
 ### NixOS / Nix
 
-From the repo root (builds a self-contained bundle; bun is wrapped in via
-shebang):
+From the repo root (builds a bundle with a store-pinned Bun shebang; no
+ambient Bun or checkout is needed at runtime):
 
 ```bash
+nix build .#pplx             # or: nix build (default package)
+nix run .#pplx -- --help
+nix profile install .#pplx
+
+# Existing non-flake entry (uses your <nixpkgs>):
 nix-build                   # ./result/bin/pplx
-nix profile install -f .    # install into your profile (also: nix-env -if .)
+nix-env -if .
 ```
+
+The locked flake exposes `pplx` and `default` for x86_64/aarch64 Linux and
+Darwin. Intel Darwin uses a compatibility nixpkgs input because unstable
+26.11 removed it; see [Nix packaging](docs/nix.md) for details and checks.
 
 The package also ships the agent skill under `share/pplx/skills/`:
 

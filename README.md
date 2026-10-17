@@ -1,153 +1,237 @@
-# pi-perplexity
+# pi-perplexity — `pplx` CLI and agent plugins
 
-A [pi](https://github.com/badlogic/pi-mono) extension that gives your coding agent real-time web search powered by your **Perplexity Pro or Max subscription**
-## Requirements
+This repository is CLI-first: the root package is the standalone Bun + TypeScript
+`pplx` CLI for Perplexity. The pi extension and the Hermes plugin live under
+`plugins/` and delegate to the CLI:
 
-- [pi](https://github.com/badlogic/pi-mono) coding agent with its bundled Node runtime (Node 18.14.1+ if running outside pi)
-- A **Perplexity Pro** or **Max** subscription
-- macOS (for zero-interaction auth), an interactive terminal (for email OTP), or a signed-in browser session cookie/token
+- `plugins/pi` — [pi](https://github.com/badlogic/pi-mono) extension
+- `plugins/hermes` — Hermes plugin (`perplexity_ask` / `perplexity_research`)
+- `skills/perplexity-cli` — agent skill shipped with the CLI
+- `research/` — captured wire contract and API notes for the CLI
 
-## Installation
+The CLI itself: Ask questions (streaming,
+cited answers), continue threads, manage spaces, inspect connectors — using
+your Perplexity Pro/Max **web session** (cookie auth). No API key, no API
+credits; only the subscription.
+
+The underlying web API is reverse-engineered and can break without notice.
+Every shipped surface (including thread/space CRUD and `--space` targeting)
+follows a live-captured wire contract; see `research/network/`.
+
+## Install
+
+Requires [Bun](https://bun.sh) ≥ 1.2.
 
 ```bash
-pi install npm:pi-perplexity
+bun install
+bun run src/index.ts --help
 ```
 
-Or from GitHub:
+Optional: expose a `pplx` binary —
 
 ```bash
-pi install github:ivanrvpereira/pi-perplexity
+npm link        # or: bun link
+pplx --help
 ```
 
-## Hermes plugin
+### NixOS / Nix
 
-This repository includes a Hermes plugin exposing `perplexity_ask` and `perplexity_research`. Unlike a skill (which only instructs the agent to run shell commands), the plugin provides typed, discoverable tools. It delegates to the richer standalone **Bun `pplx` CLI** under `cli/`, so it shares that CLI's cookie login, connectors, uploads, thread handling, and model catalog. It does **not** use the Pi extension's separate auth store.
+From the repo root (builds a self-contained bundle; bun is wrapped in via
+shebang):
 
 ```bash
-cd cli && bun install && bun src/index.ts login --status
-cd ..
-mkdir -p ~/.hermes/plugins
-ln -s "$PWD/hermes-plugin" ~/.hermes/plugins/pi-perplexity
-hermes plugins enable pi-perplexity
+nix-build                   # ./result/bin/pplx
+nix profile install -f .    # install into your profile (also: nix-env -if .)
 ```
 
-Sign in with `bun cli/src/index.ts login` if needed, then start a new Hermes session. Set `PI_PERPLEXITY_HOME` to the checkout if copying the plugin elsewhere; `PI_PERPLEXITY_BUN` can override the Bun executable. The plugin caches live search-model and connected-connector IDs at startup (with an offline fallback); restart Hermes to refresh them. `PI_PERPLEXITY_ASK_TIMEOUT_MS` and `PI_PERPLEXITY_RESEARCH_TIMEOUT_MS` control subprocess limits (90 seconds and 10 minutes by default).
+The package also ships the agent skill under `share/pplx/skills/`:
 
-Inputs: `query`, `sources` (web, scholar, social, finance, or connected GitHub), `recency`, `limit`, `files` (local uploads), `thread` or `continue`, `space`, `persistent` (default false/incognito), `save`, and `save_images`. Output is TOON with `message`, `references`, `metadata`, and `file_references` (verified saved paths where available); error responses contain `error` instead. Image URLs may expire.
-
-The agent cannot choose a model. Use `/perplexity-config list` to see recommended search models (GPT-6 Sol, Gemini 3.8 Flash, Kimi K3, Claude Sonnet 5, Grok 4.7, Claude Opus 5.5), `/perplexity-config all` for the full live catalog, `/perplexity-config <model-id>` to set one, or `/perplexity-config reset` to restore the CLI default. The command shares the Pi extension's `~/.config/pi-perplexity/config.json`; research always uses `pplx_alpha`.
-
-For occasional interactive CLI use, the existing `cli/skills/perplexity-cli` skill is sufficient. Choose the plugin when you want these named tools available to Hermes automatically.
-
-## Authentication
-
-Run login once:
-
-```text
-/perplexity-login
+```bash
+ls result/share/pplx/skills/perplexity-cli/SKILL.md
 ```
 
-This usually reuses an existing cached login, borrows the Perplexity macOS app login if available, or asks for your email OTP code.
+## Login (once)
 
-If login fails with a Cloudflare “Just a moment...” page, use browser login instead:
+Three paths, tried in this order via flags:
 
-```text
-/perplexity-login --browser
+```bash
+# 1. paste cookies from a logged-in perplexity.ai tab — the parser accepts:
+#      • a full curl command ("Copy as cURL" in any browser's devtools)
+#      • a raw Cookie header (with or without the "Cookie:" prefix)
+#      • a headers list (any `Name: value` lines; a User-Agent line is captured)
+#      • Netscape cookies.txt exports
+#      • one name=value pair per line
+#   A captured User-Agent is replayed on every request (cf_clearance/__cf_bm
+#   are bound to the UA they were issued for). PPLX_USER_AGENT overrides.
+pplx login --paste
+echo "Cookie: __Secure-next-auth.session-token=…; …" | pplx login --paste
+pplx login --paste < curl.sh      # the saved "copy as cURL" output
+
+# 2. import from a local browser profile
+pplx login --browser firefox      # also: zen, librewolf, waterfox, chromium,
+                                  #       chrome, brave, vivaldi, edge, opera,
+                                  #       browseros
+pplx login --browser zen --profile "Profile name"
+pplx login --browser chromium --profile-location ~/.config/some-chromium-fork
+                                  # --profile-location takes a browser data dir,
+                                  # a profile dir, or the cookies database file
+                                  # directly (any firefox- or chromium-family
+                                  # browser). Chromium v11 app-bound cookie
+                                  # values cannot be decrypted offline — the CLI
+                                  # says so and suggests --paste.
+
+# 3. email OTP (interactive; also non-interactive via flags or env)
+pplx login                        # prompts for email + OTP code (OTP input is not echoed)
+pplx login --email you@example.com --otp 123456
+PPLX_EMAIL=you@example.com PPLX_OTP=123456 pplx login
+
+pplx login --status               # stored credentials + live session check
+pplx login --logout               # remove stored credentials
 ```
 
-### Browser login
+Cookies are stored at `~/.config/pplx-cli/auth.json` with `0600`
+permissions and rotated automatically from `Set-Cookie` responses.
 
-Use this on Linux/headless machines when direct OTP is blocked.
+## Examples
 
-1. Open `https://www.perplexity.ai` and sign in.
-2. Open browser DevTools → **Network**.
-3. Reload the page, or ask one Perplexity question.
-4. Right-click a `www.perplexity.ai` request, preferably `perplexity_ask`.
-5. Choose **Copy** → **Copy as cURL**.
-6. Paste the copied cURL command into the pi prompt.
+```bash
+# ask — answer streams to stdout while generating; the chat is incognito
+# ("temp") by default: disposable, kept out of library history, auto-deleted by
+# Perplexity ~24h after creation. The CLI reports the temp chat id + TTL.
+pplx ask "what changed in the Rust 2024 edition?"
+pplx ask --model glm_5_3_thinking "explain CRDTs simply"
+pplx ask --sources web scholar "papers on fuzzy matching performance"
+pplx ask --attach report.pdf "summarize the key findings"
+pplx ask "current stable kernel version" --json      # single JSON object
+pplx ask "..." --copy                                 # + clipboard
+pplx ask "..." --save reply.md                        # + dump the full reply (or JSON) to a file
 
-The copied text must include cookies. A good copy contains one of `-b`, `--cookie`, or `Cookie:`, and should include `__Secure-next-auth.session-token`. If it does not, copy a different request.
+# continue the most recent live temp chat (no slug needed)
+pplx ask --continue "go deeper on the edition migrations"
 
-You can also paste just the request `Cookie:` header, or just the `__Secure-next-auth.session-token` cookie value. Full cURL is recommended because it also includes Cloudflare cookies like `cf_clearance`.
+# continue any thread (the slug is printed after every ask, or use the URL)
+pplx ask --thread e2e23ed7-f797-4a12 "add a rollout timeline"
 
-The token is saved to `~/.config/pi-perplexity/auth.json` (mode `0600`) and reused across sessions. On auth failure, run `/perplexity-login --force` to clear and re-authenticate.
+# keep the chat in library history instead of a 24h temp chat
+pplx ask --no-incognito "something I want to find again later"
 
-### Environment variables
+# temp chat registry: EXPIRES/UPDATED/MODEL/TITLE/SLUG of live temp chats
+pplx temp list                 # live only; --all includes not-yet-swept expired
+pplx temp cleanup              # purge local state for expired temp chats now
 
-| Variable | Description |
+# ask inside a space (thread is created in the space)
+pplx ask --space "Money Manager" "summarize my spending trends"
+
+# image generation (image-mode models, e.g. nanobanana2): prints a ## Images
+# section with the S3 urls + suggested filenames — urls expire in ~35min
+pplx ask --model nanobanana2 "generate a logo for a mobile accounting app"
+pplx ask --model nanobanana2 --save-images ./out "same logo, but green"  # auto-download
+
+# deep research — pplx_alpha engine, multi-step run (takes minutes, not seconds)
+pplx research "compare vector databases for a 100M-embedding workload"
+
+# history
+pplx chats list                  # alias: threads
+pplx chats list --next <cursor>  # pagination cursor printed on stderr
+pplx chats show <slug>           # full markdown: question + answer + citations
+pplx chats rename <ref> "new title"
+pplx chats pin <ref>             # also: chats unpin <ref>
+pplx chats delete <ref>          # asks you to type the slug (or --yes)
+# <ref> = thread URL, slug uuid, context_uuid, or unique title prefix
+
+# spaces
+pplx spaces list
+pplx spaces threads "Money Manager"
+pplx spaces create "Recipes" --emoji 1f37d --instructions "Prefer metric units"
+pplx spaces rename <uuid|title> "New name"
+pplx spaces delete <ref>          # asks you to type the title (or --yes)
+
+# reference
+pplx models                 # live model catalog — --picker for UI models only, --all for every mode
+pplx connectors             # connected sources (--all: full catalog)
+pplx completion bash        # shell script (bash | zsh | fish)
+```
+
+Ask output: the answer text streams to stdout as it is generated, then a trailing
+block with `## Sources` (numbered citations, when the model returns web
+results), `## Images` (image-mode asks: S3 urls + suggested filenames + expiry
+warning — the presigned urls die in ~35min, so download with `--save-images`
+or copy them immediately), `## Follow-ups`, and `## Meta` (model + thread URL).
+Progress goes to stderr, so stdout stays clean for piping:
+
+```bash
+pplx ask "…" > answer.md
+```
+
+### Temp (incognito) chats
+
+Plain `pplx ask "…"` creates a **temp chat**: `is_incognito: true`, never added
+to library history, deleted by Perplexity ~24h after creation. The chat id is
+reported on stderr with its remaining lifetime, e.g.
+
+```
+temp chat e2e23ed7-f797-4a12 (expires in 23h; auto-deleted from history) — continue: pplx ask --continue "…" or --thread e2e23ed7-f797-4a12
+```
+
+While a temp chat lives, the CLI keeps its continuation state locally
+(`$PPLX_CACHE_DIR/threads/`) so `ask --continue` (most recent) or
+`ask --thread <slug>` (specific) keep working in the same thread across
+invocations. Expired entries are swept asynchronously on every launch; the
+TTL anchor is the first message, so follow-ups never reset the clock. Use
+`--no-incognito` to create a normal persistent thread instead.
+
+`pplx research` submits the same ask request with the model preference swapped
+to Perplexity's internal `pplx_alpha` deep-research engine (verified against a
+live capture) — expect a multi-step run measured in minutes, with the answer
+arriving near the end. Deep research has its own quota family (`agentic_research`
+in `/rest/rate-limit/status`); exhaustion surfaces as the server's error.
+
+## Shell completion
+
+```bash
+pplx completion bash >> ~/.bashrc
+mkdir -p ~/.zfunc && pplx completion zsh > ~/.zfunc/_pplx   # + fpath in ~/.zshrc
+pplx completion fish > ~/.config/fish/completions/pplx.fish
+```
+
+TAB on `--model`, `--sources`, `--thread`, `--space` fetches live candidates
+(spaces by name **and** uuid, connectors, recent threads) with a 10-minute
+cache; the `<ref>` positional of `chats show|rename|delete|pin|unpin` and
+`spaces threads|rename|delete` completes with chat titles and space names.
+Everything else completes from the command tree. Degrades silently offline.
+
+## Environment variables
+
+| Variable | Effect |
 |---|---|
-| `PI_AUTH_NO_BORROW=1` | Skip macOS desktop app extraction and go straight to email OTP |
-| `PI_PERPLEXITY_TOKEN` | Raw Perplexity session token/JWT/JWE copied from a browser or another machine |
-| `PI_PERPLEXITY_COOKIE` / `PI_PERPLEXITY_COOKIES` | Full Perplexity `Cookie` header copied from a signed-in browser |
-| `PI_PERPLEXITY_EMAIL` | Pre-fill the email prompt (useful for non-interactive setups) |
-| `PI_PERPLEXITY_OTP` | Pre-fill the OTP prompt |
+| `PPLX_CONFIG_DIR` | override `~/.config/pplx-cli/` (auth store) |
+| `PPLX_CACHE_DIR` | override `~/.cache/pplx/` (caches, thread state) |
+| `PPLX_COOKIE` | raw Cookie header override — beats the stored jar; works on its own (no `pplx login` needed) |
+| `PPLX_EMAIL`, `PPLX_OTP` | non-interactive OTP login |
+| `PPLX_NO_SPINNER` | `1` disables the stderr spinner |
+| `PPLX_USER_AGENT` | override the User-Agent (beats the UA captured at login) |
 
-## Usage
+## Known unmet requirements (endpoints not captured)
 
-Once installed, the agent automatically calls `perplexity_search` whenever it needs current information. You can also ask it directly:
+The web API is reverse-engineered from captures; the following operations have
+**no captured contract** and are intentionally not shipped:
 
-> "Search Perplexity for the latest React 19 release notes"
+- Thread archive and move-to-space (no UI entry / picker canceled during capture).
+- Full-answer fetch for arbitrary threads (`chats show` renders the locally
+  recorded exchange when this CLI made it, otherwise the server-side preview).
 
-### Tool parameters
+## Exit codes
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `query` | string | ✅ | The search query |
-| `recency` | string | — | Filter by age: `hour` · `day` · `week` · `month` · `year` |
-| `limit` | number | — | Max sources to include (1–50) |
-
-Model selection is configured globally with `/perplexity-config` or `PI_PERPLEXITY_MODEL`; it is not exposed as a tool parameter, so agent-generated tool calls cannot accidentally override your configured model.
-
-### Output format
-
-The tool returns structured text the agent can reason over:
-
-```
-## Answer
-React 19 introduces Actions, use() hook, and improved Server Components...
-
-## Sources
-3 sources
-[1] React 19 Release Notes (1d ago)
-    https://react.dev/blog/2024/12/05/react-19
-    React 19 is now stable. This release includes Actions for async...
-
-[2] What's New in React 19 (3d ago)
-    https://vercel.com/blog/react-19
-    A deep dive into the new primitives landing in React 19...
-
-## Meta
-Provider: perplexity (oauth)
-Model: pplx_pro_upgraded
-```
-
-Queries always send `is_incognito: true`, so searches never appear in your Perplexity web history.
-
-## How It Works
-
-The extension calls Perplexity's internal SSE endpoint (`perplexity_ask`) using your subscription credentials obtained from the macOS app, email OTP, or a browser-imported session. Responses stream as incremental events that are merged into a final result. Network calls use the Node runtime already provided by pi; no extra runtime is required. Email OTP auth requires `Headers.getSetCookie()` support so auth cookies are exposed reliably.
+`0` ok · `1` error · `2` not logged in (run `pplx login`) · `130` interrupted.
+With `--json`, failures print `{"error": "…"}` on stdout.
 
 ## Development
 
 ```bash
-npm install          # Install dev dependencies
-npm test             # Run tests
-npm run typecheck    # Type check
+bunx tsc --noEmit   # typecheck
+bun test            # all tests, zero network (fixtures from research/network)
 ```
 
-Optional live model-selection E2E test (requires cached auth from `/perplexity-login`):
-
-```bash
-PI_PERPLEXITY_E2E=1 npm test
-PI_PERPLEXITY_E2E=1 PI_PERPLEXITY_E2E_MODELS=pplx_pro_upgraded,gpt54 npm test
-```
-
-## License
-
-MIT — see [LICENSE](LICENSE) for details.
-
----
-
-## Disclaimer
-
-This project is intended for **educational and demonstration purposes only**. It reverse-engineers an undocumented internal endpoint and uses credentials borrowed from the Perplexity macOS desktop app. This likely violates Perplexity's Terms of Service. Use at your own risk — your account may be suspended. The author makes no warranties and accepts no liability for any consequences of its use.
+Architecture, wire protocol, and the assumption register live in
+[`research/api-contract.md`](research/api-contract.md). The pi extension and
+Hermes plugin have their own READMEs under `plugins/`.

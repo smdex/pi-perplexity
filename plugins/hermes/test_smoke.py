@@ -37,11 +37,11 @@ def test_ask_options_and_toon() -> None:
     assert 'source_count: 2' in result
     assert 'file_references[0]:' in result
     command, options = calls[0]
-    assert command[:3] == ["bun", str(Path.cwd() / "cli/src/index.ts"), "ask"]
+    assert command[:3] == ["bun", str(Path.cwd() / "src/index.ts"), "ask"]
     assert command[-1] == " --what?"
     assert command.count("--sources") == 2
     assert "--attach" in command and "--no-incognito" in command
-    assert options["cwd"] == str(Path.cwd() / "cli")
+    assert options["cwd"] == str(Path.cwd())
 
 
 def test_research_and_failure() -> None:

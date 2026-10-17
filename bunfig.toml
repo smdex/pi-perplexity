@@ -1,0 +1,3 @@
+[test]
+# Scope `bun test` to the CLI suite; plugins/*/test use their own runners.
+root = "./test"

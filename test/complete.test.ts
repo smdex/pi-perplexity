@@ -13,6 +13,7 @@ import {
   shellQuote,
 } from "../src/complete.js";
 import { saveThreadState } from "../src/config.js";
+import { MODELS } from "../src/constants.js";
 
 /**
  * Completion tests — zero network: candidateSources entries are stubbed, the
@@ -21,10 +22,17 @@ import { saveThreadState } from "../src/config.js";
 
 let cacheDir: string;
 const savedSources = { ...candidateSources };
+/** Static, network-free model candidates (suite is documented zero-network). */
+const staticModelSource = async () => MODELS.map((m) => m.id);
 
 beforeAll(async () => {
   cacheDir = await mkdtemp(join(tmpdir(), "pplx-complete-test-"));
   process.env.PPLX_CACHE_DIR = cacheDir;
+  // Hermetic suite ("zero network" per file header): pin the model source to
+  // the static catalog. Unstubbed, candidateSources.model fetches the live
+  // /rest/models/config, so completion results depended on network reachability
+  // (or on fetch being broken by mocks leaked from other test files).
+  candidateSources.model = staticModelSource;
 });
 
 afterAll(async () => {
@@ -142,7 +150,7 @@ describe("getCompletion (yargs instance, stubbed sources)", () => {
     candidateSources.model = async () => Promise.reject(new Error("offline"));
     const comps = await getCompletion(parser(), ["pplx", "ask", "--model", ""]);
     expect(comps).toEqual([]);
-    candidateSources.model = savedSources.model;
+    candidateSources.model = staticModelSource; // keep the suite offline (see beforeAll)
   });
 });
 

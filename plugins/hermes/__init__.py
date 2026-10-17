@@ -50,15 +50,15 @@ def _home() -> Path:
     if os.environ.get("PI_PERPLEXITY_HOME"):
         return Path(os.environ["PI_PERPLEXITY_HOME"]).expanduser().resolve()
     for parent in Path(__file__).resolve().parents:
-        if (parent / "cli/src/index.ts").is_file():
+        if (parent / "src/index.ts").is_file():
             return parent
-    raise FileNotFoundError("Set PI_PERPLEXITY_HOME to the checkout containing cli/src/index.ts")
+    raise FileNotFoundError("Set PI_PERPLEXITY_HOME to the checkout containing src/index.ts")
 
 
 def build_cli_command(home: Path | str, command: str, *args: str) -> list[str]:
     if command not in ("ask", "research", "models", "connectors"):
         raise ValueError("unsupported pplx subcommand")
-    return [os.environ.get("PI_PERPLEXITY_BUN", "bun"), str(Path(home) / "cli/src/index.ts"), command, *args]
+    return [os.environ.get("PI_PERPLEXITY_BUN", "bun"), str(Path(home) / "src/index.ts"), command, *args]
 
 
 def _invoke(home: Path, command: str, *args: str, timeout: float | None = None) -> Any:
@@ -69,7 +69,7 @@ def _invoke(home: Path, command: str, *args: str, timeout: float | None = None) 
         seconds = ms / 1000 if 0 < ms < float("inf") else default / 1000
     except ValueError:
         seconds = default / 1000
-    result = subprocess.run(build_cli_command(home, command, *args), cwd=str(home / "cli"),
+    result = subprocess.run(build_cli_command(home, command, *args), cwd=str(home),
                             capture_output=True, text=True, check=False, timeout=timeout or seconds)
     try:
         data = json.loads(result.stdout)

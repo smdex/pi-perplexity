@@ -20,7 +20,7 @@ The TypeScript CLI creates an `AbortController` timeout and passes its signal th
 
 ## Hermes integration is opt-in
 
-Hermes discovers user plugins but only loads enabled plugins. The adapter is shipped in `hermes-plugin/` and must be installed and enabled explicitly with `hermes plugins enable pi-perplexity`; it does not alter existing Hermes sessions or tool routing by default.
+Hermes discovers user plugins but only loads enabled plugins. The adapter is shipped in `plugins/hermes/` and must be installed and enabled explicitly with `hermes plugins enable pi-perplexity`; it does not alter existing Hermes sessions or tool routing by default.
 
 ## AUTH errors do not auto-clear the cached token
 

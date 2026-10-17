@@ -1,232 +1,90 @@
-import { StringEnum, Type } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+#!/usr/bin/env bun
+/**
+ * pplx — Perplexity CLI.
+ * Command surface (all handlers live in src/commands/*); this file only wires
+ * the yargs tree, the async completion machinery, and error → exit-code mapping
+ * (0 ok / 1 error / 2 auth — with a `pplx login` hint).
+ */
+import yargs from "yargs";
+import { hideBin } from "yargs/helpers";
+import pc from "picocolors";
 
-import { registerPerplexityConfigCommand } from "./commands/config.js";
-import { registerPerplexityCommands, registerPerplexityThreadsCommand } from "./commands/login.js";
+import { AuthRequiredError } from "./api/http.js";
+import { LOGIN_HELP } from "./constants.js";
+import { buildCompletion } from "./complete.js";
+import { askCommand, researchCommand } from "./commands/ask.js";
+import { chatsCommand } from "./commands/chats.js";
+import { completionCommand } from "./commands/completion.js";
+import { connectorsCommand } from "./commands/connectors.js";
+import { loginCommand } from "./commands/login.js";
+import { modelsCommand } from "./commands/models.js";
+import { spacesCommand } from "./commands/spaces.js";
+import { tempCommand } from "./commands/temp.js";
+import { sweepTempThreads } from "./config.js";
 
-import { authenticate, type AuthCredentials } from "./auth/login.js";
-import {
-  cleanupTempThreads,
-  isTempLive,
-  listThreadStates,
-  loadThreadState,
-  saveThreadState,
-} from "./auth/threads.js";
-import { loadConfig, resolveDefaultModel } from "./config.js";
-import { effectiveSourceCount, formatForLLM } from "./search/format.js";
-import { searchPerplexity } from "./search/client.js";
-import { uploadAttachments } from "./search/upload.js";
-import { renderPerplexityCall } from "./render/call.js";
-import { renderPerplexityResult } from "./render/result.js";
-import { errorMessage } from "./util.js";
-import { AuthError, SearchError } from "./search/types.js";
+const y = yargs(hideBin(process.argv))
+  .scriptName("pplx")
+  .usage("pplx <command> [options]")
+  .version("0.1.0")
+  .option("cookie", {
+    type: "string",
+    hidden: true,
+    description: "Cookie header override (also PPLX_COOKIE)",
+  })
+  // Single integration point for requestContext (plan §4.13): export early so
+  // every handler sees it.
+  .middleware((argv) => {
+    if (typeof argv.cookie === "string" && argv.cookie.length > 0) {
+      process.env.PPLX_COOKIE = argv.cookie;
+    }
+  })
+  .command(askCommand)
+  .command(researchCommand)
+  .command(chatsCommand)
+  .command(spacesCommand)
+  .command(tempCommand)
+  .command(connectorsCommand)
+  .command(modelsCommand)
+  .command(loginCommand)
+  .command(completionCommand)
+  .demandCommand(1, LOGIN_HELP)
+  .strict();
 
-/** Extract a thread slug from a bare uuid, a /search/<uuid> URL, or a full thread URL. */
-function threadSlugFromRef(ref: string): string {
-  const match = ref.match(/\/search\/([0-9a-f-]{36})/i);
-  if (match?.[1]) return match[1];
-  return ref.trim();
+// Async stale-temp-chat sweep: fire-and-forget on every launch. The server
+// deleted these chats ~24h after creation; local state (tokens + content) is
+// removed in the background and can never block or fail the command itself.
+sweepTempThreads();
+
+/** Map an error to a message + exit code (0 ok / 1 error / 2 auth) and print it. */
+function reportAndSetCode(msg: string | null, err?: Error): number {
+  // Ctrl-C / SIGTERM during a stream: exit quietly with the conventional code.
+  if (err instanceof Error && err.name === "AbortError") {
+    process.stderr.write("\npplx: interrupted\n");
+    return 130;
+  }
+  if (err instanceof AuthRequiredError) {
+    // AuthRequiredError messages already embed the login hint.
+    process.stderr.write(`${pc.red("pplx:")} ${err.message}\n`);
+    return 2;
+  }
+  if (err instanceof Error) {
+    process.stderr.write(`${pc.red("pplx:")} ${err.message}\n`);
+    return 1;
+  }
+  // yargs parse errors (unknown command/option, missing positional…)
+  process.stderr.write(`${pc.red("pplx:")} ${msg ?? "unknown error"}\n${pc.dim("try: pplx --help")}\n`);
+  return 1;
 }
 
-export default function (pi: ExtensionAPI) {
-  registerPerplexityCommands(pi);
-  registerPerplexityConfigCommand(pi);
-  registerPerplexityThreadsCommand(pi);
-  pi.registerTool({
-    name: "perplexity_search",
-    label: "Perplexity Search",
-    description:
-      "Search the web using Perplexity. Pass thread (a session id) or continue=true to keep the same Perplexity conversation across calls.",
-    parameters: Type.Object({
-      query: Type.String({ description: "Search query" }),
-      files: Type.Optional(Type.Array(Type.String({ description: "Local file path" }), { description: "Local file paths to attach; uploaded to Perplexity before searching" })),
-      thread: Type.Optional(
-        Type.String({
-          description:
-            "Session id (thread_url_slug from a previous result's Meta section, or a perplexity.ai/search/<id> URL) — continue that conversation",
-        }),
-      ),
-      continue: Type.Optional(
-        Type.Boolean({
-          description:
-            "Continue the most recent live Perplexity session instead of starting a new one",
-        }),
-      ),
-      recency: Type.Optional(
-        StringEnum(["hour", "day", "week", "month", "year"] as const, {
-          description: "Filter results by recency",
-        }),
-      ),
-      limit: Type.Optional(
-        Type.Number({ description: "Max sources to return", minimum: 1, maximum: 50 }),
-      ),
-      model: Type.Optional(
-        Type.String({
-          description:
-            "Model slug (live catalog: anything from GET /rest/models/config — see /perplexity-config)",
-        }),
-      ),
-    }),
-    renderCall: renderPerplexityCall,
-    renderResult: renderPerplexityResult,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const start = Date.now();
-      let sourceCount = 0;
-
-      try {
-        onUpdate?.({
-          content: [{ type: "text", text: "Authenticating with Perplexity..." }],
-          details: { toolCallId },
-        });
-
-        const promptInput = async (label: string, placeholder: string): Promise<string | null | undefined> => {
-          if (!ctx?.ui?.input) {
-            return undefined;
-          }
-
-          return ctx.ui.input(label, placeholder);
-        };
-
-        const credentials: AuthCredentials = await authenticate({
-          ...(signal !== undefined ? { signal } : {}),
-          promptForEmail: async () => promptInput("Perplexity email", "you@example.com"),
-          promptForOtp: async (email) => promptInput(`Enter OTP sent to ${email}`, "123456"),
-        });
-
-        if (signal?.aborted) {
-          return {
-            content: [{ type: "text", text: "Perplexity search was cancelled." }],
-            details: { sourceCount: 0, queryMs: Date.now() - start },
-          };
-        }
-
-        onUpdate?.({
-          content: [{ type: "text", text: "Querying Perplexity..." }],
-          details: { toolCallId },
-        });
-
-        // --- follow-up resolution (thread ref > continue flag) ---
-        void cleanupTempThreads().catch(() => undefined); // fire-and-forget TTL sweep
-        let followup: { lastBackendUuid: string; readWriteToken: string } | undefined;
-        let priorCreatedAt: string | undefined;
-        let continuedSession: string | null = null;
-
-        if (typeof params.thread === "string" && params.thread.trim().length > 0) {
-          const slug = threadSlugFromRef(params.thread);
-          const state = await loadThreadState(slug);
-          if (state) {
-            followup = { lastBackendUuid: state.lastBackendUuid, readWriteToken: state.readWriteToken };
-            priorCreatedAt = state.createdAt;
-            continuedSession = state.slug;
-          } else {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No local session state for thread "${slug}". Sessions can only be continued in the same environment where they were started (incognito chats are also deleted server-side after ~24h). Start a new search instead, or pass continue=true.`,
-                },
-              ],
-              details: { sourceCount: 0, queryMs: Date.now() - start, isError: true },
-            };
-          }
-        } else if (params.continue === true) {
-          const live = (await listThreadStates()).find((state) => isTempLive(state));
-          if (!live) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    'No live Perplexity session to continue. Start one with a plain query (its Meta section will include a "Session ID" you can pass as thread later).',
-                },
-              ],
-              details: { sourceCount: 0, queryMs: Date.now() - start, isError: true },
-            };
-          }
-          followup = { lastBackendUuid: live.lastBackendUuid, readWriteToken: live.readWriteToken };
-          priorCreatedAt = live.createdAt;
-          continuedSession = live.slug;
-        }
-
-        const config = await loadConfig();
-        const model = resolveDefaultModel(config);
-
-        const attachmentUrls = typeof params.files !== "undefined" && params.files.length
-          ? await uploadAttachments(params.files.map((path: string) => ({ path })), credentials, signal)
-          : [];
-
-        const result = await searchPerplexity(
-          {
-            query: params.query,
-            model,
-            ...(attachmentUrls.length ? { attachments: attachmentUrls } : {}),
-            ...(params.recency !== undefined ? { recency: params.recency } : {}),
-            ...(followup ? { followup } : {}),
-          },
-          credentials,
-          signal,
-        );
-
-        const formatted = formatForLLM(result, params.limit);
-        sourceCount = effectiveSourceCount(result.sources.length, params.limit);
-
-        // persist thread state for continuation (needs slug + rwToken + last backend uuid)
-        const finalSlug = result.slug ?? (continuedSession && result.readWriteToken && result.backendUuid ? continuedSession : null);
-        if (finalSlug && result.readWriteToken && result.backendUuid) {
-          const now = new Date().toISOString();
-          await saveThreadState({
-            slug: finalSlug,
-            readWriteToken: result.readWriteToken,
-            lastBackendUuid: result.backendUuid,
-            url: `https://www.perplexity.ai/search/${finalSlug}`,
-            updatedAt: now,
-            query: params.query,
-            ...(result.displayModel ? { model: result.displayModel } : {}),
-            incognito: true,
-            createdAt: priorCreatedAt ?? now,
-          }).catch(() => undefined);
-        }
-
-        return {
-          content: [{ type: "text", text: formatted }],
-          details: {
-            model: result.displayModel,
-            sourceCount,
-            queryMs: Date.now() - start,
-            uuid: result.uuid,
-            ...(result.slug ? { thread: result.slug } : {}),
-            ...(continuedSession ? { continued: continuedSession } : {}),
-            authSource: credentials.source,
-            ...(params.files?.length ? { attachments: params.files.map((path: string) => path.split(/[\\/]/).pop() ?? path) } : {}),
-          },
-        };
-      } catch (error) {
-        const queryMs = Date.now() - start;
-
-        if (error instanceof AuthError) {
-          return {
-            content: [{ type: "text", text: `Authentication failed: ${error.message}` }],
-            details: { sourceCount, queryMs, isError: true },
-          };
-        }
-
-        if (error instanceof SearchError) {
-          return {
-            content: [{ type: "text", text: `Perplexity search failed: ${error.message}` }],
-            details: { sourceCount, queryMs, isError: true },
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Perplexity search failed: ${errorMessage(error)}`,
-            },
-          ],
-          details: { sourceCount, queryMs, isError: true },
-        };
-      }
-    },
+buildCompletion(y)
+  .fail((msg, err) => {
+    // Hard-exit: a non-exiting fail handler lets yargs keep parsing (running
+    // the command after a validation error) and leaks unhandled rejections.
+    process.exit(reportAndSetCode(msg ?? null, err));
+  })
+  .parseAsync()
+  .catch(() => {
+    // .fail already reported + exited; this only guards against yargs calling
+    // back without going through .fail.
+    if (!process.exitCode) process.exitCode = 1;
   });
-}

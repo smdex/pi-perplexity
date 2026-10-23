@@ -55,7 +55,7 @@ describe("renderThreadTable", () => {
     title: "how much this costs in germany?\n- frame: frame-alpha",
     status: "COMPLETED",
     answerPreview: "Here's the German-market price breakdown…",
-    updatedAt: "2026-09-21T21:32:44Z",
+    updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
     displayModel: "glm_5_3_thinking",
     spaceUuid: null,
   };

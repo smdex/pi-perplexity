@@ -17,9 +17,11 @@ compatibility: "Requires the pplx CLI (NixOS: `nix profile install -f .` from th
 
 # Perplexity CLI (`pplx`)
 
-Ask Perplexity from scripts and agents. Answers stream to stdout while
-generating; citations and follow-ups render after the answer text. Auth is a
-logged-in browser session (cookies) — no API key, subscription-only.
+Ask Perplexity from scripts and agents. Interactive TTY stdout gets a live
+alternate-screen preview with revisions redrawn; non-TTY/redirected stdout
+receives the complete answer once at the end, followed by citations and
+follow-ups. `--no-stream` disables preview. Auth is a logged-in browser
+session (cookies) — no API key, subscription-only.
 
 ## Pre-flight (every session)
 
@@ -99,6 +101,8 @@ Unavailable configured scope fails rather than falling back. Space targeting
 requires `--no-incognito` (library history); the CLI will not change privacy
 silently. Configured spaces apply only to new threads, with a warning on
 follow-ups. Research retains its own engine, ignoring saved model settings.
+Stored values are shape-validated on write without network checks and
+resolved/validated when used; unresolvable defaults fail closed at ask time.
 
 Model/slug behavior: any string passes through `--model`; `pplx models` lists
 the live catalog from `/rest/models/config` (default: search-mode slugs,
@@ -114,11 +118,13 @@ across invocations; expired entries are swept async on every launch. Use
 
 ## Output contract (stdout vs stderr)
 
-- `pplx ask` streams the answer text to **stdout**; spinner/progress and the
-  `follow up:` hint go to **stderr**. Piping `pplx ask … > answer.md` yields
-  clean markdown: answer text first, then `## Answer`-style sections
-  (`## Sources` numbered citations, `## Follow-ups`, `## Meta` model +
-  thread URL) — some answers legitimately have no Sources section.
+- `pplx ask` previews revisions in an alternate screen only on interactive
+  TTY **stdout**, then restores the screen and prints the complete answer once.
+  `--no-stream` disables preview. Non-TTY/redirected stdout receives the
+  complete answer once at the end. Spinner/progress and the `follow up:` hint
+  go to **stderr**. Piping `pplx ask … > answer.md` yields clean markdown:
+  answer text, then `## Sources` numbered citations, `## Follow-ups`, and
+  `## Meta` model + thread URL; some answers have no Sources section.
 - With `--json`, stdout is a single object:
   `{answer, readWriteToken, backendUuid, threadUrl, followups, model, sources}`;
   failures print `{"error": "…"}` on stdout — parse stdout, not stderr.
@@ -164,8 +170,12 @@ as-is and are NOT retryable within the same period — report them, don't retry.
 
 ## Streaming notes
 
-- The answer streams as full-state snapshots; the CLI prints only the newly
-  appended suffix, so piped stdout equals the final answer text.
+- Interactive TTY preview redraws full-state revisions in an alternate screen;
+  non-TTY/redirected stdout receives the complete answer once at the end.
+  `--no-stream` disables preview, not completion validation.
+- Completion is protocol-based: `COMPLETED` plus a final marker is required,
+  not just EOF. Cancellation exits `130`, restores any preview, and never
+  prints a partial answer as success.
 - Rate limits or Cloudflare challenges surface as typed HTTP error messages.
   `401` clears the stored session and asks to re-login; `403` keeps it.
 - `--attach` uploads the file first (presign → S3 POST), then asks; the

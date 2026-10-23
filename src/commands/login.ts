@@ -1,5 +1,6 @@
 import type { CommandModule } from "yargs";
 import { createInterface } from "node:readline/promises";
+import { readFileSync } from "node:fs";
 import pc from "picocolors";
 import { clearAuth, loadAuth, saveAuth, type StoredAuth } from "../config.js";
 import {
@@ -96,7 +97,11 @@ async function promptSecret(label: string): Promise<string> {
 async function readPastedInput(prompt: string): Promise<string> {
   let text = "";
   if (!process.stdin.isTTY) {
-    return Bun.stdin.text().catch(() => "");
+    try {
+      return readFileSync(0, "utf8");
+    } catch {
+      return "";
+    }
   }
   out(prompt);
   const rl = createInterface({ input: process.stdin });

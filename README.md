@@ -106,6 +106,7 @@ permissions and rotated automatically from `Set-Cookie` responses.
 
 `pplx` stores settings separately from auth in `~/.config/pplx-cli/config.json`
 (or `$PPLX_CONFIG_DIR/config.json`). Writes are atomic and use `0600` permissions.
+Stored values are shape-validated on write without network checks and resolved/validated when used; unresolvable defaults fail closed at ask time.
 
 ```bash
 pplx config set model glm_5_3_thinking

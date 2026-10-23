@@ -1,6 +1,6 @@
 # CLI-first Perplexity specification
 
-Status: scope confirmed; implementation not started.
+Status: implemented on integrate/pplx-cli (three-platform Nix, x86_64-darwin dropped by user decision); live-service behavior untested.
 
 ## Goal and decisions
 

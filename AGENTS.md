@@ -60,4 +60,4 @@ bun test test/sse.test.ts   # single file
 ### Never
 
 - Never commit secrets, credentials, `.env`, cached auth tokens, or live response dumps containing private data.
-- Never clear cached auth automatically on transient 401/403 responses.
+- Never clear cached auth on transient 403/429 responses. A 401 deliberately clears the cookie jar as an invalid session; preserve this tested behavior.

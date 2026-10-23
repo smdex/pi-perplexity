@@ -1,7 +1,7 @@
 {
   "name": "pi-perplexity",
   "version": "0.6.2",
-  "description": "Perplexity web search for pi — uses your Pro/Max subscription, no API credits needed",
+  "description": "Perplexity search for pi via the installed pplx CLI",
   "keywords": [
     "pi-package",
     "pi-extension"
@@ -36,7 +36,6 @@
     "typescript": "*"
   },
   "scripts": {
-    "auth:local": "bun run scripts/login.ts",
     "typecheck": "tsc --noEmit",
     "test:build": "node -e \"require('node:fs').rmSync('.tmp-test',{recursive:true,force:true})\" && tsc --project tsconfig.test.json",
     "test": "npm run test:build && node --test --experimental-test-module-mocks \".tmp-test/test/**/*.test.js\""

@@ -14,7 +14,7 @@ export function warn(text: string): void {
 
 /**
  * Run a handler; on failure, `--json` commands print `{"error": …}` + set
- * exitCode (2 auth, 1 other) and swallow (streams flush naturally); non-json
+ * exitCode (130 abort, 2 auth, 1 other) and swallow (streams flush naturally); non-json
  * rethrows for the index.ts fail-handler.
  */
 export async function run(json: boolean, fn: () => Promise<void>): Promise<void> {
@@ -24,7 +24,8 @@ export async function run(json: boolean, fn: () => Promise<void>): Promise<void>
     if (json) {
       const message = error instanceof Error ? error.message : String(error);
       out(JSON.stringify({ error: message }));
-      process.exitCode = error instanceof AuthRequiredError ? 2 : 1;
+      process.exitCode = error instanceof Error && error.name === "AbortError"
+        ? 130 : error instanceof AuthRequiredError ? 2 : 1;
       return;
     }
     throw error;

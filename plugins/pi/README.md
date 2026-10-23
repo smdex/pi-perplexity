@@ -1,139 +1,94 @@
-# pi-perplexity — pi extension
+# pi-perplexity — Pi extension
 
-A [pi](https://github.com/badlogic/pi-mono) extension that gives your coding agent real-time web search powered by your **Perplexity Pro or Max subscription**.
-
-This package lives at `plugins/pi` in the pi-perplexity repository; the
-repository root is the `pplx` CLI this extension is being aligned with (see the
-[repository README](../../README.md)). The Hermes plugin lives at
-`plugins/hermes`.
-
-## Requirements
-
-- [pi](https://github.com/badlogic/pi-mono) coding agent with its bundled Node runtime (Node 18.14.1+ if running outside pi)
-- A **Perplexity Pro** or **Max** subscription
-- macOS (for zero-interaction auth), an interactive terminal (for email OTP), or a signed-in browser session cookie/token
+A thin [Pi](https://pi.dev) adapter for the installed `pplx` CLI. The CLI alone
+handles Perplexity requests, cookie authentication, response merging, sessions,
+and saved defaults. A Perplexity Pro/Max web subscription is required.
 
 ## Installation
 
-```bash
-pi install npm:pi-perplexity
-```
+1. Install the CLI using the [repository instructions](../../README.md#install).
+   Ensure `pplx --help` works on the **PATH inherited by Pi**. The CLI installation
+   supplies its runtime; this extension does not invoke Bun or a checkout path.
+2. From a checkout, register this package:
 
-Or from GitHub:
+   ```bash
+   pi install /absolute/path/to/pi-perplexity/plugins/pi
+   ```
 
-```bash
-pi install github:ivanrvpereira/pi-perplexity
-```
+   The standalone published Pi package uses `pi install npm:pi-perplexity`.
+   Installing the repository root as a Pi package is no longer supported.
+3. Authenticate in a terminal, outside tool execution:
 
-## Authentication
+   ```bash
+   pplx login --paste          # import browser cookies; see CLI instructions
+   ```
 
-Run login once:
+Restart Pi or use `/reload` after changing its environment or extension.
+Tool calls never prompt for email/OTP and never launch login. Missing or expired
+credentials return instructions to run `pplx login` in a terminal.
 
-```text
-/perplexity-login
-```
+## Tool
 
-This usually reuses an existing cached login, borrows the Perplexity macOS app login if available, or asks for your email OTP code.
+The agent calls `perplexity_search`:
 
-If login fails with a Cloudflare “Just a moment...” page, use browser login instead:
-
-```text
-/perplexity-login --browser
-```
-
-### Browser login
-
-Use this on Linux/headless machines when direct OTP is blocked.
-
-1. Open `https://www.perplexity.ai` and sign in.
-2. Open browser DevTools → **Network**.
-3. Reload the page, or ask one Perplexity question.
-4. Right-click a `www.perplexity.ai` request, preferably `perplexity_ask`.
-5. Choose **Copy** → **Copy as cURL**.
-6. Paste the copied cURL command into the pi prompt.
-
-The copied text must include cookies. A good copy contains one of `-b`, `--cookie`, or `Cookie:`, and should include `__Secure-next-auth.session-token`. If it does not, copy a different request.
-
-You can also paste just the request `Cookie:` header, or just the `__Secure-next-auth.session-token` cookie value. Full cURL is recommended because it also includes Cloudflare cookies like `cf_clearance`.
-
-The token is saved to `~/.config/pi-perplexity/auth.json` (mode `0600`) and reused across sessions. On auth failure, run `/perplexity-login --force` to clear and re-authenticate.
-
-### Environment variables
-
-| Variable | Description |
+| Parameter | Meaning |
 |---|---|
-| `PI_AUTH_NO_BORROW=1` | Skip macOS desktop app extraction and go straight to email OTP |
-| `PI_PERPLEXITY_TOKEN` | Raw Perplexity session token/JWT/JWE copied from a browser or another machine |
-| `PI_PERPLEXITY_COOKIE` / `PI_PERPLEXITY_COOKIES` | Full Perplexity `Cookie` header copied from a signed-in browser |
-| `PI_PERPLEXITY_EMAIL` | Pre-fill the email prompt (useful for non-interactive setups) |
-| `PI_PERPLEXITY_OTP` | Pre-fill the OTP prompt |
+| `query` | Required search text |
+| `model` | Explicit model override (`pplx models` lists identifiers) |
+| `sources` | Source/connector identifiers replacing CLI defaults |
+| `space` | Explicit space title or UUID |
+| `incognito` | Explicit privacy choice; `false` retains the chat in history |
+| `recency` | `hour`, `day`, `week`, `month`, or `year` |
+| `files` | Local attachment paths, relative to the Pi session directory |
+| `thread` | CLI thread slug or URL to continue |
+| `continue` | Continue the latest live CLI session |
+| `limit` | Maximum citations to display (1–50); does not change search scope |
 
-## Usage
+Omitted options are not passed to `pplx ask --json`, so CLI settings and built-in
+defaults apply. There is no independent Pi model/source/space configuration.
+An empty `sources` list is rejected rather than silently inheriting a saved
+scope; use `["web"]` for web-only search or omit the option to inherit defaults. Space/privacy conflicts are reported by the CLI;
+the adapter never silently disables incognito mode for a space.
 
-Once installed, the agent automatically calls `perplexity_search` whenever it needs current information. You can also ask it directly:
+Results contain Answer, numbered Sources, optional Images and Follow-ups, and
+Meta sections. Meta includes the CLI session identifier when available; session
+state is managed only by the CLI. Complete structured results are returned
+rather than incremental answer streaming. Pi displays progress while waiting;
+cancellation terminates the child (and its owned process group on POSIX), with
+SIGTERM then SIGKILL after five seconds if needed, and awaits its exit. CLI failures return readable text and error details
+for the tool renderer, not raw exceptions or credentials.
 
-> "Search Perplexity for the latest React 19 release notes"
+## Migrating from the old Pi client
 
-### Tool parameters
+The `/perplexity-login`, `/perplexity-config`, and `/perplexity-threads` commands
+are removed. Use `pplx login`, `pplx config`, and `pplx chats` in a terminal.
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `query` | string | ✅ | The search query |
-| `recency` | string | — | Filter by age: `hour` · `day` · `week` · `month` · `year` |
-| `limit` | number | — | Max sources to include (1–50) |
-
-Model selection is configured globally with `/perplexity-config` or `PI_PERPLEXITY_MODEL`; it is not exposed as a tool parameter, so agent-generated tool calls cannot accidentally override your configured model.
-
-### Output format
-
-The tool returns structured text the agent can reason over:
-
-```
-## Answer
-React 19 introduces Actions, use() hook, and improved Server Components...
-
-## Sources
-3 sources
-[1] React 19 Release Notes (1d ago)
-    https://react.dev/blog/2024/12/05/react-19
-    React 19 is now stable. This release includes Actions for async...
-
-[2] What's New in React 19 (3d ago)
-    https://vercel.com/blog/react-19
-    A deep dive into the new primitives landing in React 19...
-
-## Meta
-Provider: perplexity (oauth)
-Model: pplx_pro_upgraded
-```
-
-Queries always send `is_incognito: true`, so searches never appear in your Perplexity web history.
-
-## How It Works
-
-The extension calls Perplexity's internal SSE endpoint (`perplexity_ask`) using your subscription credentials obtained from the macOS app, email OTP, or a browser-imported session. Responses stream as incremental events that are merged into a final result. Network calls use the Node runtime already provided by pi; no extra runtime is required. Email OTP auth requires `Headers.getSetCookie()` support so auth cookies are exposed reliably.
+Old Pi JWT credentials, settings, environment variables (`PI_PERPLEXITY_*`), and
+session caches are **not read, converted, deleted, or overwritten**. Reauthenticate
+with CLI cookie login, even if the old extension was already logged in. Manually
+copy any desired model setting into `pplx config set model MODEL`; likewise set
+`sources` and `space` using `pplx config --help`. CLI settings and authentication
+are separate files under `~/.config/pplx-cli/` (`PPLX_CONFIG_DIR` override), and
+CLI sessions/caches use `PPLX_CACHE_DIR`. Existing old Pi-only sessions may need
+to be restarted in the CLI.
 
 ## Development
 
-```bash
-npm install          # Install dev dependencies
-npm test             # Run tests
-npm run typecheck    # Type check
-```
-
-Optional live model-selection E2E test (requires cached auth from `/perplexity-login`):
+From `plugins/pi` with the existing development dependencies available:
 
 ```bash
-PI_PERPLEXITY_E2E=1 npm test
-PI_PERPLEXITY_E2E=1 PI_PERPLEXITY_E2E_MODELS=pplx_pro_upgraded,gpt54 npm test
+npm test
+npm run typecheck
+node --no-deprecation --import ./node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-register.mjs --input-type=module -e "import('./src/index.ts').then((m)=>{ const entry = m.default?.default ?? m.default; if (typeof entry !== 'function') throw new Error('default export missing'); })"
 ```
 
-## License
+Tests use a fake installed `pplx`, never the live service. The CLI parser
+regression also requires the repository's Bun runtime and root CLI sources; it
+runs with fresh empty authentication and expects a login error before networking. No new runtime
+dependency is required; Pi supplies its host packages and the adapter uses Node
+18.14.1+ subprocess APIs.
 
-MIT — see [LICENSE](LICENSE) for details.
+## License and disclaimer
 
----
-
-## Disclaimer
-
-This project is intended for **educational and demonstration purposes only**. It reverse-engineers an undocumented internal endpoint and uses credentials borrowed from the Perplexity macOS desktop app. This likely violates Perplexity's Terms of Service. Use at your own risk — your account may be suspended. The author makes no warranties and accepts no liability for any consequences of its use.
+MIT — see [LICENSE](LICENSE). The CLI uses an undocumented web API which can
+change without notice and may violate Perplexity's terms. Use at your own risk.

@@ -137,15 +137,19 @@ export async function streamAsk(opts: AskOptions, hooks?: AskHooks): Promise<Ask
   if (!response.body) throw new Error("Ask stream: empty response body");
 
   const merger = new AskMerger();
+  let completed = false;
   for await (const raw of readSseJson(response.body, hooks?.signal)) {
     const ev = parseAskEvent(raw);
     if (!ev) continue; // non-object snapshot — skip rather than trust the cast
     merger.merge(ev);
     hooks?.onEvent?.(merger.answerText(), ev);
     if (isTerminalEvent(ev)) {
+      completed = true;
       break; // drain handled by readSseJson (end_of_stream) / generator cancel
     }
   }
+  hooks?.signal?.throwIfAborted();
+  if (!completed) throw new Error("Ask stream ended before completion; retry the request.");
   const slug = merger.slug;
   return {
     answer: merger.answerText(),

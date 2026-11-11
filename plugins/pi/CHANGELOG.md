@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-11-11
+
+### Fixed
+
+- Login accepts Perplexity's account-scoped `__Secure-pplx.session.<account-id>` session cookie in paste, browser-import, and OTP flows, unblocking logins from current browsers.
+- Streaming answers redraw terminal previews correctly and complete only on protocol completion.
+
+### Added
+
+- Nix flake packaging for the standalone `pplx` CLI (x86_64-linux, aarch64-linux, aarch64-darwin).
+
+### Changed
+
+- Repository restructured CLI-first: the `pplx` CLI lives at the repo root, with `pi` and Hermes adapters under `plugins/` delegating to the installed CLI.
+
 ## [0.6.2] - 2026-10-07
 
 ### Fixed

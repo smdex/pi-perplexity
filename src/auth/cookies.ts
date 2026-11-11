@@ -35,8 +35,28 @@ export interface ImportResult {
 
 export const SESSION_COOKIE_NAME = "__Secure-next-auth.session-token";
 
+/** Account-scoped session cookie observed on logged-in perplexity.ai sessions since
+ *  2026-11: `__Secure-pplx.session.<account-uuid>` (JWE value), paired with
+ *  `__Host-pplx-last-active-account=<account-uuid>` and the `x-pplx-account` header.
+ *  New sessions ship it INSTEAD of the global NextAuth token, so both names must count
+ *  as "the session cookie" — /api/auth/session stays the real validity arbiter. */
+export const ACCOUNT_SESSION_COOKIE_PREFIX = "__Secure-pplx.session.";
+
+/** True for a `__Secure-pplx.session.<account-id>=<value>` cookie (non-empty account id
+ *  and value). `__Secure-pplx.session-id` and friends must NOT match (prefix ends in `.`). */
+export function isAccountSessionCookie(cookie: string): boolean {
+  if (!cookie.startsWith(ACCOUNT_SESSION_COOKIE_PREFIX)) return false;
+  const rest = cookie.slice(ACCOUNT_SESSION_COOKIE_PREFIX.length);
+  const eq = rest.indexOf("=");
+  return eq > 0 && rest.length > eq + 1;
+}
+
+/** A jar carries a session when it has the legacy NextAuth session token or the
+ *  account-scoped pplx session cookie (either is accepted server-side). */
 export function hasSessionCookie(cookies: string[]): boolean {
-  return cookies.some((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+  return cookies.some(
+    (cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`) || isAccountSessionCookie(cookie),
+  );
 }
 
 function errorMessage(error: unknown): string {

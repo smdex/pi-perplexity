@@ -135,6 +135,63 @@ describe("hasSessionCookie", () => {
     expect(hasSessionCookie(["other=y"])).toBeFalse();
     expect(hasSessionCookie([])).toBeFalse();
   });
+
+  it("detects the account-scoped session cookie (__Secure-pplx.session.<account-id>)", () => {
+    const account = "11112222-3333-4444-5555-666677778888";
+    expect(hasSessionCookie([`__Secure-pplx.session.${account}=eyJhdr.sig`])).toBeTrue();
+    expect(
+      hasSessionCookie([
+        `__Secure-pplx.session.${account}=x`,
+        `__Host-pplx-last-active-account=${account}`,
+      ]),
+    ).toBeTrue();
+    // lookalikes must not count: other cookies, empty account id, or empty value
+    expect(hasSessionCookie(["__Secure-pplx.session-id=sid"])).toBeFalse();
+    expect(hasSessionCookie(["__Secure-pplx.session.=v"])).toBeFalse();
+    expect(hasSessionCookie([`__Secure-pplx.session.${account}=`])).toBeFalse();
+    expect(hasSessionCookie(["__Secure-pplx.session.="])).toBeFalse();
+  });
+});
+
+// ---------------------------------------------------------------- paste regression: account-scoped session
+
+// Logged-in browsers now ship the account-scoped session cookie
+// (__Secure-pplx.session.<account-id>, with __Host-pplx-last-active-account alongside)
+// INSTEAD of the NextAuth token — a fresh paste must still pass the login gate.
+describe("paste with account-scoped session cookie", () => {
+  it("a curl paste carrying only the account-scoped cookie parses and passes the login gate", () => {
+    const account = "11112222-3333-4444-5555-666677778888";
+    const input = [
+      "curl 'https://www.perplexity.ai/rest/sse/perplexity_ask' \\",
+      "  -X POST \\",
+      "  -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) TestUA/1.0' \\",
+      "  -H 'Accept: text/event-stream' \\",
+      `  -H 'x-pplx-account: ${account}' \\`,
+      `  -H 'Cookie: pplx.visitor-id=vid; __Host-pplx-last-active-account=${account}; __Secure-pplx.session.${account}=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..abc.def' \\`,
+      "  --data-raw '{\"query_str\":\"q\"}'",
+    ].join("\n");
+    const parsed = parsePastedCookies(input);
+    expect(parsed.userAgent).toBe("Mozilla/5.0 (X11; Linux x86_64) TestUA/1.0");
+    expect(parsed.cookies).toEqual([
+      "pplx.visitor-id=vid",
+      `__Host-pplx-last-active-account=${account}`,
+      `__Secure-pplx.session.${account}=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..abc.def`,
+    ]);
+    expect(hasSessionCookie(parsed.cookies)).toBeTrue(); // the gate validateJar applies
+  });
+
+  it("a headers-list paste carrying only the account-scoped cookie passes the login gate", () => {
+    const account = "11112222-3333-4444-5555-666677778888";
+    const input = [
+      "User-Agent: HeadersUA/2",
+      `x-pplx-account: ${account}`,
+      `Cookie: __Secure-pplx.session.${account}=eyJ..sig`,
+      "",
+    ].join("\n");
+    const parsed = parsePastedCookies(input);
+    expect(parsed.cookies).toEqual([`__Secure-pplx.session.${account}=eyJ..sig`]);
+    expect(hasSessionCookie(parsed.cookies)).toBeTrue();
+  });
 });
 
 // ---------------------------------------------------------------- firefox sqlite
@@ -198,6 +255,38 @@ describe("readFirefoxCookiesAt", () => {
     expect(result.cookies).toEqual([]);
     expect(result.sessionTokenFound).toBeFalse();
     expect(nonEmptyString(result.warning)).toBeTrue();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // Regression: profiles migrated to the account-scoped session cookie (no legacy
+  // NextAuth token) must import as logged-in, not "missing session token".
+  it("marks the jar as session-bearing when only the account-scoped cookie exists", async () => {
+    const account = "11112222-3333-4444-5555-666677778888";
+    const dir = await mkdtemp(join(tmpdir(), "pplx-ffx-"));
+    const dbPath = join(dir, "cookies.sqlite");
+    const db = new Database(dbPath);
+    db.run(MOZ_COOKIES_SCHEMA);
+    db.run("INSERT INTO moz_cookies (name, value, host) VALUES (?, ?, ?)", [
+      `__Secure-pplx.session.${account}`,
+      "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..abc.def",
+      ".perplexity.ai",
+    ]);
+    db.run("INSERT INTO moz_cookies (name, value, host) VALUES (?, ?, ?)", [
+      "__Host-pplx-last-active-account",
+      account,
+      ".perplexity.ai",
+    ]);
+    db.run("INSERT INTO moz_cookies (name, value, host) VALUES (?, ?, ?)", ["pplx.session-id", "sid", "perplexity.ai"]);
+    db.close();
+
+    const result = readFirefoxCookiesAt(dbPath);
+    expect(result.warning).toBeNull();
+    expect(result.sessionTokenFound).toBeTrue();
+    expect(result.cookies).toEqual([
+      `__Secure-pplx.session.${account}=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..abc.def`,
+      `__Host-pplx-last-active-account=${account}`,
+      "pplx.session-id=sid",
+    ]);
     await rm(dir, { recursive: true, force: true });
   });
 });

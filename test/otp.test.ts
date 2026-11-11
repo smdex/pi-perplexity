@@ -110,6 +110,23 @@ describe("completeOtpLogin", () => {
     }
   });
 
+  // Regression: sessions can be delivered as the account-scoped cookie
+  // (__Secure-pplx.session.<account-id>) instead of the NextAuth token.
+  it("accepts the account-scoped session cookie from signin-otp", async () => {
+    const account = "11112222-3333-4444-5555-666677778888";
+    const mocked = otpMock({ otpCookies: [`__Secure-pplx.session.${account}=acct-sess-1; Path=/`] });
+    try {
+      const session: OtpSession = { email: "user@example.com", csrfToken: "csrf-1", cookies: ["__Host-next-auth.csrf-token=c1"] };
+      const auth = await completeOtpLogin(session, "123456");
+      expect(auth.cookies).toContain(`__Secure-pplx.session.${account}=acct-sess-1`);
+      expect(hasSessionCookie(auth.cookies)).toBeTrue();
+      expect(auth.accountUuid).toBe("acc-uuid");
+      expect(auth.email).toBe("user@example.com");
+    } finally {
+      mocked.restore();
+    }
+  });
+
   it("throws when signin-otp yields neither a session cookie nor a token", async () => {
     const mocked = otpMock({ otpCookies: [], otpBody: {} });
     try {

@@ -11,7 +11,7 @@ import type { GeneratedImage, WebResultRef } from "./api/sse.js";
 
 export interface StoredAuth {
   kind: "cookies";
-  cookies: string[]; // "name=value" pairs; jar. Must contain __Secure-next-auth.session-token
+  cookies: string[]; // "name=value" pairs; jar. Must contain a session cookie: __Secure-next-auth.session-token OR __Secure-pplx.session.<account-id>
   accountUuid: string | null; // GET /api/auth/session → user.id (the x-pplx-account value)
   sessionExpires: string | null; // ISO from /api/auth/session
   email: string | null;

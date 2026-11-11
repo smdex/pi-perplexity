@@ -151,7 +151,7 @@ async function validateJar(
 ): Promise<StoredAuth> {
   if (!hasSessionCookie(cookies)) {
     throw new Error(
-      "cookies are missing __Secure-next-auth.session-token — copy the full cookie set from a logged-in browser (e.g. \"Copy as cURL\" in devtools, then paste it here)",
+      "cookies are missing a Perplexity session cookie — expected __Secure-next-auth.session-token or the account-scoped __Secure-pplx.session.<account-id> — copy the full cookie set from a logged-in browser (e.g. \"Copy as cURL\" in devtools, then paste it here)",
     );
   }
   const info = await fetchSessionInfo(cookies, undefined, opts?.userAgent ?? undefined);
@@ -261,7 +261,10 @@ export const loginCommand: CommandModule = {
         ...(typeof argv["profile-location"] === "string" ? { profileLocation: argv["profile-location"] } : {}),
       });
       if (result.warning || !hasSessionCookie(result.cookies)) {
-        throw new Error(result.warning ?? "imported cookies are missing the session token — is that browser logged in?");
+        throw new Error(
+          result.warning ??
+            "imported cookies are missing a session cookie (__Secure-next-auth.session-token or __Secure-pplx.session.<account-id>) — is that browser logged in?",
+        );
       }
       const auth = await validateJar(result.cookies, browser);
       await saveAuth(auth);

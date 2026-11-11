@@ -43,8 +43,8 @@ spot-checked against raw trace JSON unless marked **[ASSUMPTION]**.
   **Login will discover them as follows:** the email-OTP flow (re-used from
   `src/auth/login.ts`, three calls against `/api/auth/*`, see §A) receives `Set-Cookie`
   headers on the `csrf` and final `signin-otp` responses. The CLI must persist
-  `getSetCookie()` values (name=value pairs, 0600 file) — most importantly
-  `__Secure-next-auth.session-token` — instead of only the JSON `token` body the old
+  `getSetCookie()` values (name=value pairs, 0600 file) — most importantly a session cookie
+  (`__Secure-next-auth.session-token` or `__Secure-pplx.session.<account-id>`) — instead of only the JSON `token` body the old
   extension used. If session cookie is missing/expired (any 401/403 on `/rest/*`), clear the
   store and re-login. Cookie expiry: `/api/auth/session` returns `expires` (ISO) — use it as
   the session TTL. **[ASSUMPTION]** `cf_clearance` cannot be obtained programmatically; if

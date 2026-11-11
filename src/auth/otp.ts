@@ -1,5 +1,5 @@
 import { API_VERSION, ORIGIN, USER_AGENT } from "../constants.js";
-import { SESSION_COOKIE_NAME } from "./cookies.js";
+import { hasSessionCookie } from "./cookies.js";
 import { cookieHeader, saveAuth, upsertCookie, type StoredAuth } from "../config.js";
 
 /**
@@ -176,7 +176,7 @@ export async function completeOtpLogin(session: OtpSession, otp: string, signal?
 
   const bearerToken = extractTokenFromPayload(await readJsonResponse(otpResponse));
 
-  const hasSession = cookies.some((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+  const hasSession = hasSessionCookie(cookies);
   if (!hasSession && !bearerToken) {
     throw new Error(
       "OTP login succeeded but the response included neither a session cookie nor a bearer token — login failed.",
